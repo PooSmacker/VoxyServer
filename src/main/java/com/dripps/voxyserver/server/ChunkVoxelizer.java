@@ -23,7 +23,7 @@ public class ChunkVoxelizer {
         ServerChunkEvents.CHUNK_UNLOAD.register(this::onChunkUnload);
     }
 
-    private void onChunkLoad(ServerLevel level, LevelChunk chunk) {
+    private void onChunkLoad(ServerLevel level, LevelChunk chunk, boolean generated) {
         ingestChunk(level, chunk);
     }
 

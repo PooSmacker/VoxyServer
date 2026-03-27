@@ -70,8 +70,8 @@ public class LodStreamingService {
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
 
         // when a chunk is (re)voxelized, invalidate the sent flag so the updated section gets restreamed
-        ServerChunkEvents.CHUNK_LOAD.register((level, chunk) -> invalidateForChunk(level, chunk.getPos().x, chunk.getPos().z));
-        ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> invalidateForChunk(level, chunk.getPos().x, chunk.getPos().z));
+        ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> invalidateForChunk(level, chunk.getPos().x(), chunk.getPos().z()));
+        ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> invalidateForChunk(level, chunk.getPos().x(), chunk.getPos().z()));
     }
 
     private void invalidateForChunk(ServerLevel level, int chunkX, int chunkZ) {

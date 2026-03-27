@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version '1.15-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom' version '1.15-SNAPSHOT'
     id 'maven-publish'
 }
 
@@ -45,17 +45,16 @@ repositories {
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    modImplementation files("libs/voxy.jar")
-    modCompileOnly "maven.modrinth:sodium:mc1.21.11-0.8.6-fabric"
+    implementation files("libs/voxy.jar")
+    compileOnly "maven.modrinth:sodium:mc1.21.11-0.8.6-fabric"
 
     // lwjgl is bundled with the client but not the dedicated server
     // voxy's Mapper uses MemoryUtil for off-heap allocation
-    include implementation("org.lwjgl:lwjgl:3.3.3")
+    include implementation("org.lwjgl:lwjgl:3.4.1")
     include implementation("org.lwjgl:lwjgl::natives-windows")
     include implementation("org.lwjgl:lwjgl::natives-linux")
 }

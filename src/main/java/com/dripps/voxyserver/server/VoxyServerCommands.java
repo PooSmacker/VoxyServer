@@ -26,7 +26,7 @@ public final class VoxyServerCommands {
                                         .then(Commands.literal("current")
                                                 .executes(context -> executeCurrent(context.getSource(), coordinatorSupplier)))
                                         .then(Commands.literal("dimension")
-                                                .then(Commands.argument("dimension", StringArgumentType.word())
+                                                .then(Commands.argument("dimension", StringArgumentType.greedyString())
                                                         .suggests((context, builder) -> {
                                                             java.util.List<String> dimensions = new java.util.ArrayList<>();
                                                             for (ServerLevel level : context.getSource().getServer().getAllLevels()) {

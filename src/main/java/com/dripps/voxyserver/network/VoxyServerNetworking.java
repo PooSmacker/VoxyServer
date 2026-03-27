@@ -5,10 +5,10 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public class VoxyServerNetworking {
 
     public static void register() {
-        PayloadTypeRegistry.playS2C().register(LODSectionPayload.TYPE, LODSectionPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(LODBulkPayload.TYPE, LODBulkPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(LODClearPayload.TYPE, LODClearPayload.CODEC);
-
-        PayloadTypeRegistry.playC2S().register(LODReadyPayload.TYPE, LODReadyPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(LODSectionPayload.TYPE, LODSectionPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(LODBulkPayload.TYPE, LODBulkPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(LODClearPayload.TYPE, LODClearPayload.CODEC);
+        //server
+        PayloadTypeRegistry.serverboundPlay().register(LODReadyPayload.TYPE, LODReadyPayload.CODEC);
     }
 }

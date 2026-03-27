@@ -49,7 +49,7 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    implementation files("libs/voxy.jar")
+    implementation files("libs/voxy-26.1.jar")
     compileOnly "maven.modrinth:sodium:mc1.21.11-0.8.6-fabric"
 
     // lwjgl is bundled with the client but not the dedicated server

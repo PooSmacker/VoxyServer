@@ -42,6 +42,10 @@ public class Voxyserver implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
                 VoxyServerCommands.register(dispatcher, () -> importCoordinator));
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            if (!server.isDedicatedServer()) {
+                LOGGER.info("VoxyServer disabled in singleplayer.");
+                return;
+            }
             var worldPath = server.getWorldPath(LevelResource.ROOT);
             lodEngine = new ServerLodEngine(worldPath);
             chunkVoxelizer = new ChunkVoxelizer(lodEngine, config);

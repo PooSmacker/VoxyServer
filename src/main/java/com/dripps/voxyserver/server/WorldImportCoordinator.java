@@ -242,6 +242,22 @@ public class WorldImportCoordinator {
                     }
                     active.lastUpdateMs = now;
 
+                    long elapsedMs = System.currentTimeMillis() - active.startedAtMs;
+                    int avgcps = (int) (finished / (elapsedMs / 1000.0));
+                    String etaString;
+                    if(avgcps > 0){
+                        long remaining = outOf - finished;
+                        long eta = remaining / avgcps;
+                        long h = eta / 3600;
+                        int m = (int) ((eta % 3600) / 60);
+                        int s = (int) (eta % 60);
+                        etaString = (h < 10 ? "0" + h : h) + ":" +
+                                (m < 10 ? "0" + m : m) + ":" +
+                                (s < 10 ? "0" + s : s);
+                    } else {
+                        etaString = " infinity";
+                    }
+
                     request.server.execute(() -> {
                         String msg = "importing "
                                 + active.dimensionId
@@ -249,7 +265,10 @@ public class WorldImportCoordinator {
                                 + finished
                                 + "/"
                                 + Math.max(finished, outOf)
-                                + " chunks";
+                                + " chunks, average CPS: "
+                                + avgcps
+                                + " ETA: "
+                                + etaString;
                         sendSuccess(request.source, msg);
                         Voxyserver.LOGGER.info(msg);
                     });

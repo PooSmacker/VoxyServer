@@ -58,6 +58,7 @@ dependencies {
     include implementation("org.lwjgl:lwjgl:3.3.3")
     include implementation("org.lwjgl:lwjgl::natives-windows")
     include implementation("org.lwjgl:lwjgl::natives-linux")
+    include implementation("org.lwjgl:lwjgl::natives-linux-arm64")
 }
 
 processResources {

@@ -200,7 +200,7 @@ public class WorldImportCoordinator {
             return;
         }
 
-        var world = this.engine.getOrCreate(worldId);
+        var world = this.engine.getOrCreate(worldId, request.level.dimension().identifier());
         if (world == null) {
             request.server.execute(() -> {
                 sendFailure(request.source, "could not create voxy world for " + request.dimensionId);
@@ -268,6 +268,7 @@ public class WorldImportCoordinator {
         }
 
         if (completed && !cancelled) {
+            this.engine.invalidatePresenceIndex(request.level);
             this.streamingService.clearDimensionForReadyPlayers(request.level);
             String msg = "finished import for "
                     + request.dimensionId

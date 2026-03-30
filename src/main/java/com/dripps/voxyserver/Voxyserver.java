@@ -49,10 +49,10 @@ public class Voxyserver implements ModInitializer {
 
             var worldPath = server.getWorldPath(LevelResource.ROOT);
             lodEngine = new ServerLodEngine(worldPath);
-            chunkVoxelizer = new ChunkVoxelizer(lodEngine, config);
-            chunkVoxelizer.register();
             streamingService = new LodStreamingService(lodEngine, config);
             streamingService.register();
+            chunkVoxelizer = new ChunkVoxelizer(lodEngine, streamingService, config);
+            chunkVoxelizer.register();
             importCoordinator = new WorldImportCoordinator(lodEngine, streamingService);
             if (config.dirtyTrackingEnabled) {
                 dirtyTracker = new DirtyTracker(chunkVoxelizer, streamingService, config.dirtyTrackingInterval);
@@ -81,7 +81,7 @@ public class Voxyserver implements ModInitializer {
             }
         });
 
-        // thius handles dimension changes, clear players lod cache for old dimension
+        // handle dimension changes, clear players lod cache for old dimensions
         ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((player, origin, destination) -> {
             if (streamingService != null) {
                 streamingService.onDimensionChange(player, destination);

@@ -11,7 +11,7 @@ import com.dripps.voxyserver.server.WorldImportCoordinator;
 import com.dripps.voxyserver.util.VoxyUpdateChecker;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.world.level.storage.LevelResource;
@@ -83,7 +83,7 @@ public class Voxyserver implements ModInitializer {
         });
 
         // handle dimension changes, clear players lod cache for old dimensions
-        ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((player, origin, destination) -> {
+        ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, origin, destination) -> {
             if (streamingService != null) {
                 streamingService.onDimensionChange(player, destination);
             }

@@ -37,7 +37,7 @@
   "depends": {
     "fabricloader": ">=${loader_version}",
     "fabric-api": "*",
-    "minecraft": "${minecraft_version}"
+    "minecraft": ["~26.1"]
   },
   "suggests": {
     "voxy": "*",
@@ -52,8 +52,5 @@
       },
       "update_checker": false
     }
-  },
-  "breaks": {
-    "voxyworldgenv2": "*"
   }
 }

@@ -9,4 +9,5 @@ run/
 .project
 bin/
 voxy/
+voxy_old/
 libs/

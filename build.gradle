@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version '1.15-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom' version '1.15-SNAPSHOT'
     id 'maven-publish'
 }
 
@@ -44,25 +44,27 @@ repositories {
     mavenCentral()
 }
 
+def lwjglVersion = "3.4.1"
+
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    modImplementation files("libs/voxy-1.21.11.jar")
-    modCompileOnly "maven.modrinth:sodium:mc1.21.11-0.8.6-fabric"
-    modCompileOnly "com.terraformersmc:modmenu:17.0.0"
-    modCompileOnly "me.shedaniel.cloth:cloth-config-fabric:21.11.153"
+    implementation files("libs/voxy-26.1.jar")
+    compileOnly "maven.modrinth:sodium:mc26.1.1-0.8.9-fabric"
+    compileOnly "maven.modrinth:modmenu:18.0.0-alpha.8"
+    compileOnly "me.shedaniel.cloth:cloth-config-fabric:26.1.154"
 
     // lwjgl is bundled with the client but not the dedicated server
     // voxy's Mapper uses MemoryUtil for off-heap allocation
-    include implementation("org.lwjgl:lwjgl:3.3.3")
-    include implementation("org.lwjgl:lwjgl::natives-windows")
-    include implementation("org.lwjgl:lwjgl::natives-linux")
-    include implementation("org.lwjgl:lwjgl::natives-linux-arm64")
+    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+    include(implementation("org.lwjgl:lwjgl"))
+    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-windows"))
+    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-linux"))
+    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"))
 }
 
 processResources {
@@ -78,7 +80,7 @@ processResources {
     }
 }
 
-def targetJavaVersion = 21
+def targetJavaVersion = 25
 tasks.withType(JavaCompile).configureEach {
     // ensure that the encoding is set to UTF-8, no matter what the system default is
     // this fixes some edge cases with special characters not displaying correctly

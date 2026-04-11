@@ -42,10 +42,10 @@ public class ChunkVoxelizer {
         ServerChunkEvents.CHUNK_UNLOAD.register(this::onChunkUnload);
     }
 
-    private void onChunkLoad(ServerLevel level, LevelChunk chunk) {
-        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z, true);
+    private void onChunkLoad(ServerLevel level, LevelChunk chunk, boolean generateOnChunkLoad) {
+        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x(), chunk.getPos().z(), true);
         if (ingestChunk(level, chunk, true)) {
-            pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z));
+            pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x(), chunk.getPos().z()));
             return;
         }
 
@@ -53,8 +53,8 @@ public class ChunkVoxelizer {
     }
 
     private void onChunkUnload(ServerLevel level, LevelChunk chunk) {
-        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z, false);
-        pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z));
+        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x(), chunk.getPos().z(), false);
+        pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x(), chunk.getPos().z()));
         if (ingestOnChunkUnload) {
             ingestChunk(level, chunk, false);
         }
@@ -97,20 +97,20 @@ public class ChunkVoxelizer {
 
             lastWorldSecY = worldSecY;
             pendingSectionYs.add(worldSecY);
-            streamingService.markChunkPendingInitialLoad(dimension, chunk.getPos().x, worldSecY, chunk.getPos().z);
+            streamingService.markChunkPendingInitialLoad(dimension, chunk.getPos().x(), worldSecY, chunk.getPos().z());
         }
         return pendingSectionYs;
     }
 
     private void clearPendingChunkSections(Identifier dimension, LevelChunk chunk, List<Integer> pendingSectionYs) {
         for (int worldSecY : pendingSectionYs) {
-            streamingService.clearChunkPendingDirty(dimension, chunk.getPos().x, worldSecY, chunk.getPos().z);
+            streamingService.clearChunkPendingDirty(dimension, chunk.getPos().x(), worldSecY, chunk.getPos().z());
         }
     }
 
     private void scheduleRetry(ServerLevel level, LevelChunk chunk) {
         pendingChunkRetries.put(
-                new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z),
+                new PendingChunk(level.dimension().identifier(), chunk.getPos().x(), chunk.getPos().z()),
                 currentTick + RETRY_INTERVAL_TICKS
         );
     }

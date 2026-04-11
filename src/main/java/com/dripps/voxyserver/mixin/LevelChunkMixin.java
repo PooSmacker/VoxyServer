@@ -27,7 +27,7 @@ public abstract class LevelChunkMixin {
         DirtyTracker tracker = DirtyTracker.INSTANCE;
         if (tracker != null) {
             LevelChunk self = (LevelChunk) (Object) this;
-            tracker.markDirty(serverLevel, self.getPos().x, pos.getY(), self.getPos().z);
+            tracker.markDirty(serverLevel, self.getPos().x(), pos.getY(), self.getPos().z());
         }
     }
 }

@@ -2,7 +2,7 @@
 
 a fabric server side mod that voxelizes chunks into LODs using [voxy](https://github.com/MCRcortex/voxy) and streams them to connected clients. players with voxy installed will receive LOD data from the server automatically, no client side world scanning/loading needed.
 
-**minecraft 1.21.11 | fabric**
+**Latest: minecraft 26.1.x | fabric**
 
 ## how it works
 
@@ -92,6 +92,7 @@ config file is generated at `config/voxyserver.json` on first run.
 | `maxSectionsPerTickPerPlayer` | `10` | max LOD sections sent per player per tick cycle |
 | `sectionsPerPacket` | `50` | max LOD sections bundled into a single network packet |
 | `tickInterval` | `5` | server ticks between each streaming cycle |
+| `workerThreads` | `3` | number of worker threads for voxy to use |
 | `generateOnChunkLoad` | `true` | voxelize chunks as they load on the server |
 | `dirtyTrackingEnabled` | `true` | revoxelize and push LODs when blocks change |
 | `dirtyTrackingInterval` | `40` | ticks between dirty chunk flushes (40 = 2 seconds) |
@@ -103,10 +104,11 @@ config file is generated at `config/voxyserver.json` on first run.
 ```json
 {
   "lodStreamRadius": 256,
-  "maxSectionsPerTickPerPlayer": 10,
+  "maxSectionsPerTickPerPlayer": 100,
   "sectionsPerPacket": 50,
   "generateOnChunkLoad": true,
   "tickInterval": 5,
+  "workerThreads": 3,
   "dirtyTrackingEnabled": true,
   "dirtyTrackingInterval": 40,
   "debugTrackingEnabled": false,

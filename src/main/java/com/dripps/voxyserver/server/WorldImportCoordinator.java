@@ -291,7 +291,6 @@ public class WorldImportCoordinator {
         }
 
         if (completed && !cancelled) {
-            this.engine.invalidatePresenceIndex(request.level);
             this.streamingService.clearDimensionForReadyPlayers(request.level);
             String msg = "finished import for "
                     + request.dimensionId

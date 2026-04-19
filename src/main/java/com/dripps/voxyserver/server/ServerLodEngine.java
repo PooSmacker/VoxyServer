@@ -10,14 +10,9 @@ import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.chunk.LevelChunk;
 
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
 
 public class ServerLodEngine extends VoxyInstance {
     @FunctionalInterface
@@ -28,12 +23,6 @@ public class ServerLodEngine extends VoxyInstance {
     private final Path basePath;
     private final SectionSerializationStorage.Config storageConfig;
     private final ConcurrentHashMap<WorldIdentifier, Identifier> dimensionsByWorld = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<WorldIdentifier, StoredSectionPresenceIndex> presenceIndexes = new ConcurrentHashMap<>();
-    private final ExecutorService presenceIndexExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "VoxyServer Presence Index");
-        t.setDaemon(true);
-        return t;
-    });
     private volatile DirtySectionListener dirtySectionListener;
 
     public ServerLodEngine(Path worldFolder) {
@@ -76,7 +65,6 @@ public class ServerLodEngine extends VoxyInstance {
             return null;
         }
         this.attachDirtyCallback(identifier, world);
-        this.ensurePresenceIndex(identifier, world);
         return world;
     }
 
@@ -96,67 +84,11 @@ public class ServerLodEngine extends VoxyInstance {
             return null;
         }
         this.attachDirtyCallback(identifier, world);
-        this.ensurePresenceIndex(identifier, world);
         return world;
-    }
-
-    public boolean mayHaveStoredSection(WorldIdentifier identifier, WorldEngine world, long sectionKey) {
-        if (identifier == null || world == null || WorldEngine.getLevel(sectionKey) != 0) {
-            return true;
-        }
-        return this.ensurePresenceIndex(identifier, world).mayContain(sectionKey);
-    }
-
-    public void markChunkPossiblyPresent(ServerLevel level, LevelChunk chunk) {
-        WorldIdentifier identifier = WorldIdentifier.of(level);
-        if (identifier == null) {
-            return;
-        }
-
-        StoredSectionPresenceIndex index = this.presenceIndexes.get(identifier);
-        if (index == null) {
-            return;
-        }
-
-        int worldSecX = chunk.getPos().x() >> 1;
-        int worldSecZ = chunk.getPos().z() >> 1;
-        int chunkSectionY = chunk.getMinSectionY() - 1;
-        int lastWorldSecY = Integer.MIN_VALUE;
-        for (var ignored : chunk.getSections()) {
-            chunkSectionY++;
-            int worldSecY = chunkSectionY >> 1;
-            if (worldSecY == lastWorldSecY) {
-                continue;
-            }
-            lastWorldSecY = worldSecY;
-            index.add(WorldEngine.getWorldSectionId(0, worldSecX, worldSecY, worldSecZ));
-        }
-    }
-
-    public void invalidatePresenceIndex(ServerLevel level) {
-        WorldIdentifier identifier = WorldIdentifier.of(level);
-        if (identifier == null) {
-            return;
-        }
-
-        WorldEngine world = this.getOrCreate(level);
-        if (world == null) {
-            return;
-        }
-
-        StoredSectionPresenceIndex index = new StoredSectionPresenceIndex();
-        this.presenceIndexes.put(identifier, index);
-        this.schedulePresenceIndexBuild(identifier, world, index);
     }
 
     @Override
     public void shutdown() {
-        this.presenceIndexExecutor.shutdownNow();
-        try {
-            this.presenceIndexExecutor.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
-        }
         super.shutdown();
     }
 
@@ -189,38 +121,5 @@ public class ServerLodEngine extends VoxyInstance {
             }
             listener.onSectionDirty(dimension, section.key);
         });
-    }
-
-    private StoredSectionPresenceIndex ensurePresenceIndex(WorldIdentifier identifier, WorldEngine world) {
-        StoredSectionPresenceIndex index = this.presenceIndexes.computeIfAbsent(identifier, ignored -> new StoredSectionPresenceIndex());
-        if (!index.isReady()) {
-            this.schedulePresenceIndexBuild(identifier, world, index);
-        }
-        return index;
-    }
-
-    private void schedulePresenceIndexBuild(WorldIdentifier identifier, WorldEngine world, StoredSectionPresenceIndex index) {
-        if (world == null || !index.tryScheduleBuild()) {
-            return;
-        }
-
-        var filter = index.createBuildFilter();
-        world.acquireRef();
-        try {
-            this.presenceIndexExecutor.execute(() -> {
-                try {
-                    world.storage.iteratePositions(0, key -> index.addTo(filter, key));
-                    index.completeBuild(filter);
-                } catch (Exception e) {
-                    Voxyserver.LOGGER.warn("failed to build presence index for {}", identifier.getLongHash(), e);
-                    index.failBuild();
-                } finally {
-                    world.releaseRef();
-                }
-            });
-        } catch (RejectedExecutionException e) {
-            world.releaseRef();
-            index.failBuild();
-        }
     }
 }

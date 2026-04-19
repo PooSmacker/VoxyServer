@@ -1,6 +1,8 @@
 package com.dripps.voxyserver.server;
 
 import com.dripps.voxyserver.Voxyserver;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntList;
 import me.cortex.voxy.common.world.WorldEngine;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -9,8 +11,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -64,9 +64,7 @@ public class ChunkVoxelizer {
         WorldEngine world = engine.getOrCreate(level);
         if (world == null) return false;
 
-        List<Integer> pendingSectionYs = markPendingResend ? markPendingChunkSections(level, chunk) : List.of();
-
-        engine.markChunkPossiblyPresent(level, chunk);
+        IntList pendingSectionYs = markPendingResend ? markPendingChunkSections(level, chunk) : IntList.of();
 
         if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {
             com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE.markVoxelized();
@@ -83,9 +81,9 @@ public class ChunkVoxelizer {
         return ingestChunk(level, chunk, false);
     }
 
-    private List<Integer> markPendingChunkSections(ServerLevel level, LevelChunk chunk) {
+    private IntList markPendingChunkSections(ServerLevel level, LevelChunk chunk) {
         Identifier dimension = level.dimension().identifier();
-        List<Integer> pendingSectionYs = new ArrayList<>();
+        IntList pendingSectionYs = new IntArrayList();
         int chunkSectionY = chunk.getMinSectionY() - 1;
         int lastWorldSecY = Integer.MIN_VALUE;
         for (var ignored : chunk.getSections()) {
@@ -102,7 +100,7 @@ public class ChunkVoxelizer {
         return pendingSectionYs;
     }
 
-    private void clearPendingChunkSections(Identifier dimension, LevelChunk chunk, List<Integer> pendingSectionYs) {
+    private void clearPendingChunkSections(Identifier dimension, LevelChunk chunk, IntList pendingSectionYs) {
         for (int worldSecY : pendingSectionYs) {
             streamingService.clearChunkPendingDirty(dimension, chunk.getPos().x(), worldSecY, chunk.getPos().z());
         }

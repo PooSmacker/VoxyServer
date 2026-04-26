@@ -183,6 +183,37 @@ public class LodStreamingService {
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
     }
 
+    private void cleanupOldPlayerCaches(MinecraftServer server) {
+        int expirationDays = Voxyserver.getConfig().playerCacheExpirationDays;
+        if (expirationDays <= 0) return;
+
+        Path playerDir = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .resolve("voxyserver").resolve("player_lods");
+
+        if (!Files.exists(playerDir)) return;
+
+        long expirationMillis = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(expirationDays);
+
+        CompletableFuture.runAsync(() -> {
+            try (java.util.stream.Stream<Path> stream = Files.list(playerDir)) {
+                int deleted = 0;
+                for (Path file : stream.toList()) {
+                    if (file.toString().endsWith(".dat")) {
+                        if (Files.getLastModifiedTime(file).toMillis() < expirationMillis) {
+                            Files.deleteIfExists(file);
+                            deleted++;
+                        }
+                    }
+                }
+                if (deleted > 0) {
+                    Voxyserver.LOGGER.info("Cleaned up {} expired player LOD cache files (older than {} days).", deleted, expirationDays);
+                }
+            } catch (Exception e) {
+                Voxyserver.LOGGER.error("Failed to clean up old player LOD caches", e);
+            }
+        });
+    }
+
     // NUEVO: Funciones para guardar y cargar las versiones globales
     private synchronized void saveGlobalVersions(Path file) {
         if (sectionVersions.isEmpty()) return;
@@ -277,6 +308,7 @@ public class LodStreamingService {
         if (!versionsLoaded) {
             Path file = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver").resolve("global_versions.dat");
             loadGlobalVersions(file);
+            cleanupOldPlayerCaches(server); // <-- Ejecutamos la limpieza asíncrona al arrancar
             versionsLoaded = true;
         }
 

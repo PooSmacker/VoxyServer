@@ -23,6 +23,7 @@ public class VoxyServerConfig {
     public int dirtyTrackingInterval = 40;
     public boolean debugTrackingEnabled = false;
     public int debugTrackingInterval = 200;
+    public int playerCacheExpirationDays = 14;
 
     public static VoxyServerConfig load() {
         Path configPath = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);

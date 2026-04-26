@@ -66,8 +66,6 @@ public class LodStreamingService {
     private volatile MinecraftServer server;
     private int tickCounter = 0;
     private volatile long currentTick = 0L;
-
-    // Variables para el autoguardado global
     private boolean versionsLoaded = false;
     private int autoSaveCounter = 0;
 
@@ -139,7 +137,6 @@ public class LodStreamingService {
     public void register() {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             var tracker = new PlayerLodTracker();
-            // Cargar progreso del jugador asincronamente
             Path playerDataFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
                     .resolve("voxyserver").resolve("player_lods").resolve(handler.getPlayer().getUUID().toString() + ".dat");
             tracker.load(playerDataFile);
@@ -149,7 +146,6 @@ public class LodStreamingService {
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             PlayerLodTracker tracker = trackers.remove(handler.getPlayer().getUUID());
             if (tracker != null) {
-                // Guardar progreso al desconectar sin lagear el main thread
                 Path playerDataFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
                         .resolve("voxyserver").resolve("player_lods").resolve(handler.getPlayer().getUUID().toString() + ".dat");
                 CompletableFuture.runAsync(() -> tracker.save(playerDataFile));
@@ -214,7 +210,6 @@ public class LodStreamingService {
         });
     }
 
-    // NUEVO: Funciones para guardar y cargar las versiones globales
     private synchronized void saveGlobalVersions(Path file) {
         if (sectionVersions.isEmpty()) return;
         try {
@@ -277,7 +272,6 @@ public class LodStreamingService {
     }
 
     public void shutdown() {
-        // Guardado de seguridad de jugadores y mundo global al parar el server
         if (this.server != null) {
             Path voxyDir = this.server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver");
             Path playerDir = voxyDir.resolve("player_lods");
@@ -304,11 +298,10 @@ public class LodStreamingService {
     private void onServerTick(MinecraftServer server) {
         this.server = server;
         
-        // Cargar versiones globales en el primer tick válido
         if (!versionsLoaded) {
             Path file = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver").resolve("global_versions.dat");
             loadGlobalVersions(file);
-            cleanupOldPlayerCaches(server); // <-- Ejecutamos la limpieza asíncrona al arrancar
+            cleanupOldPlayerCaches(server);
             versionsLoaded = true;
         }
 
@@ -317,7 +310,6 @@ public class LodStreamingService {
         expirePendingDirtySections();
         checkStreamWorkerHealth();
 
-        // Autoguardado de versiones globales cada 5 minutos (6000 ticks) para prevenir pérdida por crasheos
         if (++autoSaveCounter >= 6000) {
             autoSaveCounter = 0;
             Path file = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver").resolve("global_versions.dat");

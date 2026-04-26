@@ -41,7 +41,6 @@ public class PlayerLodTracker {
         this.sentSectionVersions.defaultReturnValue(-1);
     }
 
-    // NUEVO: Guarda el estado del jugador comprimido en el disco
     public synchronized void save(Path file) {
         try {
             Files.createDirectories(file.getParent());
@@ -57,7 +56,6 @@ public class PlayerLodTracker {
         }
     }
 
-    // NUEVO: Carga el estado del jugador desde el disco
     public synchronized void load(Path file) {
         if (!Files.exists(file)) return;
         try (DataInputStream in = new DataInputStream(new GZIPInputStream(Files.newInputStream(file)))) {
@@ -70,7 +68,6 @@ public class PlayerLodTracker {
         }
     }
 
-    // NUEVO: Limpia inteligentemente solo los LODs de una dimensión específica
     public synchronized void clearDimension(int dimOrdinal) {
         sentSectionVersions.keySet().removeIf(key -> ((int)(key >>> 60) & 0xF) == dimOrdinal);
         resetScanStateLocked();
@@ -210,10 +207,12 @@ public class PlayerLodTracker {
         this.preferredMaxSections = maxSections;
     }
 
+    // returns the clients preferred radius clamped to the server max, or server default if unset
     public int getEffectiveRadius(int serverMax) {
         return (preferredRadius <= 0) ? serverMax : Math.min(preferredRadius, serverMax);
     }
 
+    // returns the clients preferred rate clamped to the server max, or server default if unset
     public int getEffectiveMaxSections(int serverMax) {
         return (preferredMaxSections <= 0) ? serverMax : Math.min(preferredMaxSections, serverMax);
     }

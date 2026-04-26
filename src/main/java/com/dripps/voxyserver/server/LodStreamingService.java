@@ -25,7 +25,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.biome.Biome;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,6 +38,8 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 public class LodStreamingService {
     private static final long IDLE_SCAN_RESTART_TICKS = 100L;
@@ -59,6 +66,10 @@ public class LodStreamingService {
     private volatile MinecraftServer server;
     private int tickCounter = 0;
     private volatile long currentTick = 0L;
+
+    // Variables para el autoguardado global
+    private boolean versionsLoaded = false;
+    private int autoSaveCounter = 0;
 
     // biome id -> vanilla registry id cache per mapper, only accessed from stream thread
     private final IdentityHashMap<Mapper, int[]> biomeIdCaches = new IdentityHashMap<>();
@@ -128,11 +139,21 @@ public class LodStreamingService {
     public void register() {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             var tracker = new PlayerLodTracker();
+            // Cargar progreso del jugador asincronamente
+            Path playerDataFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                    .resolve("voxyserver").resolve("player_lods").resolve(handler.getPlayer().getUUID().toString() + ".dat");
+            tracker.load(playerDataFile);
             trackers.put(handler.getPlayer().getUUID(), tracker);
         });
 
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            trackers.remove(handler.getPlayer().getUUID());
+            PlayerLodTracker tracker = trackers.remove(handler.getPlayer().getUUID());
+            if (tracker != null) {
+                // Guardar progreso al desconectar sin lagear el main thread
+                Path playerDataFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                        .resolve("voxyserver").resolve("player_lods").resolve(handler.getPlayer().getUUID().toString() + ".dat");
+                CompletableFuture.runAsync(() -> tracker.save(playerDataFile));
+            }
         });
 
         ServerPlayNetworking.registerGlobalReceiver(LODReadyPayload.TYPE, (payload, context) -> {
@@ -160,6 +181,36 @@ public class LodStreamingService {
         });
 
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
+    }
+
+    // NUEVO: Funciones para guardar y cargar las versiones globales
+    private synchronized void saveGlobalVersions(Path file) {
+        if (sectionVersions.isEmpty()) return;
+        try {
+            Files.createDirectories(file.getParent());
+            try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(file)))) {
+                out.writeInt(sectionVersions.size());
+                for (var entry : sectionVersions.entrySet()) {
+                    out.writeLong(entry.getKey());
+                    out.writeInt(entry.getValue());
+                }
+            }
+        } catch (Exception e) {
+            Voxyserver.LOGGER.error("Failed to save global section versions", e);
+        }
+    }
+
+    private synchronized void loadGlobalVersions(Path file) {
+        if (!Files.exists(file)) return;
+        try (DataInputStream in = new DataInputStream(new GZIPInputStream(Files.newInputStream(file)))) {
+            int size = in.readInt();
+            for (int i = 0; i < size; i++) {
+                sectionVersions.put(in.readLong(), in.readInt());
+            }
+            Voxyserver.LOGGER.info("Cargadas {} versiones de chunks globales desde el caché.", size);
+        } catch (Exception e) {
+            Voxyserver.LOGGER.error("Failed to load global section versions", e);
+        }
     }
 
     public void markChunkPendingDirty(Identifier dimension, int chunkX, int sectionY, int chunkZ) {
@@ -195,6 +246,16 @@ public class LodStreamingService {
     }
 
     public void shutdown() {
+        // Guardado de seguridad de jugadores y mundo global al parar el server
+        if (this.server != null) {
+            Path voxyDir = this.server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver");
+            Path playerDir = voxyDir.resolve("player_lods");
+            for (var entry : trackers.entrySet()) {
+                entry.getValue().save(playerDir.resolve(entry.getKey().toString() + ".dat"));
+            }
+            saveGlobalVersions(voxyDir.resolve("global_versions.dat"));
+        }
+        
         streamExecutor.shutdownNow();
         try {
             streamExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -211,10 +272,25 @@ public class LodStreamingService {
 
     private void onServerTick(MinecraftServer server) {
         this.server = server;
+        
+        // Cargar versiones globales en el primer tick válido
+        if (!versionsLoaded) {
+            Path file = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver").resolve("global_versions.dat");
+            loadGlobalVersions(file);
+            versionsLoaded = true;
+        }
+
         currentTick++;
         flushReadyInitialLoadSections();
         expirePendingDirtySections();
         checkStreamWorkerHealth();
+
+        // Autoguardado de versiones globales cada 5 minutos (6000 ticks) para prevenir pérdida por crasheos
+        if (++autoSaveCounter >= 6000) {
+            autoSaveCounter = 0;
+            Path file = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("voxyserver").resolve("global_versions.dat");
+            CompletableFuture.runAsync(() -> saveGlobalVersions(file));
+        }
 
         if (++tickCounter < tickInterval) return;
         tickCounter = 0;
@@ -272,7 +348,6 @@ public class LodStreamingService {
         var tracker = trackers.get(player.getUUID());
         if (tracker == null || !tracker.isReady()) return;
 
-        tracker.reset();
         Identifier dim = newLevel.dimension().identifier();
         ServerPlayNetworking.send(player, LODClearPayload.clearDimension(dim));
     }
@@ -286,7 +361,7 @@ public class LodStreamingService {
             ServerPlayer player = level.getServer().getPlayerList().getPlayer(entry.getKey());
             if (player == null || player.level() != level) continue;
 
-            tracker.reset();
+            tracker.clearDimension(dimOrdinals.getOrdinal(dim));
             ServerPlayNetworking.send(player, LODClearPayload.clearDimension(dim));
         }
     }
@@ -329,7 +404,9 @@ public class LodStreamingService {
             }
 
             int version = getSectionVersion(dimOrd, key);
-            if (tracker.hasSent(key, version)) continue;
+            long compositeKey = composeSectionKey(dimOrd, key);
+            
+            if (tracker.hasSent(compositeKey, version)) continue;
             if (isSectionPendingDirty(dimOrd, key)) continue;
 
             WorldSection section = world.acquireIfExists(key);
@@ -342,7 +419,7 @@ public class LodStreamingService {
                     batch.add(payload);
                     sent++;
                 }
-                tracker.markSent(key, version);
+                tracker.markSent(compositeKey, version);
             } finally {
                 try {
                     section.release();
@@ -526,6 +603,8 @@ public class LodStreamingService {
         PreSerializedLodPayload preSerialized = PreSerializedLodPayload.fromBulk(
                 new LODBulkPayload(dimension, List.of(payload)), level.registryAccess());
 
+        long compositeKey = composeSectionKey(dimOrdinals.getOrdinal(dimension), sectionKey);
+
         for (var entry : trackers.entrySet()) {
             PlayerLodTracker tracker = entry.getValue();
             if (!tracker.isReady() || !tracker.isLodEnabled()) {
@@ -541,7 +620,7 @@ public class LodStreamingService {
                 continue;
             }
 
-            tracker.markSent(sectionKey, version);
+            tracker.markSent(compositeKey, version);
 
             UUID playerId = entry.getKey();
             if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {

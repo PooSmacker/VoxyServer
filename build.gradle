@@ -53,7 +53,7 @@ dependencies {
 
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    implementation files("libs/voxy-26.1.jar")
+    implementation files("libs/voxy.jar")
     compileOnly "maven.modrinth:sodium:mc26.1.1-0.8.9-fabric"
     compileOnly "maven.modrinth:modmenu:18.0.0-alpha.8"
     compileOnly "me.shedaniel.cloth:cloth-config-fabric:26.1.154"

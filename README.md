@@ -98,6 +98,7 @@ config file is generated at `config/voxyserver.json` on first run.
 | `dirtyTrackingInterval` | `40` | ticks between dirty chunk flushes (40 = 2 seconds) |
 | `debugTrackingEnabled` | `false` | output internal server stats to the console periodically |
 | `debugTrackingInterval` | `200` | ticks between dumping tracking stats (200 = 10 seconds) |
+| `playerCacheExpirationDays` | `14` | days after which inactive player LOD caches are deleted on server start |
 
 ### example config
 
@@ -112,7 +113,8 @@ config file is generated at `config/voxyserver.json` on first run.
   "dirtyTrackingEnabled": true,
   "dirtyTrackingInterval": 40,
   "debugTrackingEnabled": false,
-  "debugTrackingInterval": 200
+  "debugTrackingInterval": 200,
+  "playerCacheExpirationDays": 14
 }
 ```
 

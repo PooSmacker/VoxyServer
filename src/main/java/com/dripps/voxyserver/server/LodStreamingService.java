@@ -233,7 +233,7 @@ public class LodStreamingService {
             for (int i = 0; i < size; i++) {
                 sectionVersions.put(in.readLong(), in.readInt());
             }
-            Voxyserver.LOGGER.info("Cargadas {} versiones de chunks globales desde el caché.", size);
+            Voxyserver.LOGGER.info("Loaded {} global section versions from cache.", size);
         } catch (Exception e) {
             Voxyserver.LOGGER.error("Failed to load global section versions", e);
         }

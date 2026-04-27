@@ -155,6 +155,12 @@ public class LodStreamingService {
         ServerPlayNetworking.registerGlobalReceiver(LODReadyPayload.TYPE, (payload, context) -> {
             var tracker = trackers.get(context.player().getUUID());
             if (tracker != null) {
+                long incomingCacheId = payload.cacheId();
+                if (tracker.getLastCacheId() != 0L && tracker.getLastCacheId() != incomingCacheId) {
+                    Voxyserver.LOGGER.info("Player {} deleted their local .voxy cache, resetting server-side tracker", context.player().getName().getString());
+                    tracker.reset();
+                }
+                tracker.setLastCacheId(incomingCacheId);
                 tracker.setReady(true);
                 Voxyserver.LOGGER.info("player {} is ready for LOD streaming", context.player().getName().getString());
                 ServerPlayNetworking.send(context.player(),
@@ -194,7 +200,8 @@ public class LodStreamingService {
             try (java.util.stream.Stream<Path> stream = Files.list(playerDir)) {
                 int deleted = 0;
                 for (Path file : stream.toList()) {
-                    if (file.toString().endsWith(".dat")) {
+                    String fileName = file.getFileName().toString();
+                    if (fileName.endsWith(".dat")) {
                         if (Files.getLastModifiedTime(file).toMillis() < expirationMillis) {
                             Files.deleteIfExists(file);
                             deleted++;
@@ -420,8 +427,17 @@ public class LodStreamingService {
 
         List<LODSectionPayload> batch = new ArrayList<>();
         int sent = 0;
+        int scanned = 0;
+        
+        // Prevent the thread from spinning endlessly if scanning a massive radius of empty/already sent sections
+        int scanLimit = Math.max(10000, effectiveMaxSections * 50);
 
-        while (sent < effectiveMaxSections) {
+        while (sent < effectiveMaxSections && scanned < scanLimit) {
+            scanned++;
+            if ((scanned & 1023) == 0) { // Keep the watchdog happy
+                lastStreamHeartbeat = System.nanoTime();
+            }
+
             long key = tracker.nextSectionKeyToScan(scanTick, IDLE_SCAN_RESTART_TICKS);
             if (key == PlayerLodTracker.NO_SECTION_KEY) {
                 break;

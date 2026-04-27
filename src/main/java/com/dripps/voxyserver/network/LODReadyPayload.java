@@ -6,7 +6,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
 // client signals it has VoxyServer + Voxy and is ready to receive lods
-public record LODReadyPayload() implements CustomPacketPayload {
+public record LODReadyPayload(long cacheId) implements CustomPacketPayload {
 
     public static final Type<LODReadyPayload> TYPE =
             new Type<>(Identifier.parse("voxyserver:lod_ready"));
@@ -15,11 +15,11 @@ public record LODReadyPayload() implements CustomPacketPayload {
             StreamCodec.of(LODReadyPayload::write, LODReadyPayload::read);
 
     private static void write(RegistryFriendlyByteBuf buf, LODReadyPayload payload) {
-        // empty payload :D
+        buf.writeLong(payload.cacheId);
     }
 
     private static LODReadyPayload read(RegistryFriendlyByteBuf buf) {
-        return new LODReadyPayload();
+        return new LODReadyPayload(buf.readLong());
     }
 
     @Override

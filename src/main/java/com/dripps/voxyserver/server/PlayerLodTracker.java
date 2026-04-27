@@ -18,6 +18,7 @@ public class PlayerLodTracker {
     private volatile boolean ready = false;
     private int lastChunkX;
     private int lastChunkZ;
+    private long lastCacheId = 0L;
 
     private volatile boolean lodEnabled = true;
     private volatile int preferredRadius = -1;
@@ -41,6 +42,14 @@ public class PlayerLodTracker {
         this.sentSectionVersions.defaultReturnValue(-1);
     }
 
+    public long getLastCacheId() {
+        return lastCacheId;
+    }
+
+    public void setLastCacheId(long id) {
+        this.lastCacheId = id;
+    }
+
     public synchronized void save(Path file) {
         try {
             Files.createDirectories(file.getParent());
@@ -50,6 +59,7 @@ public class PlayerLodTracker {
                     out.writeLong(entry.getLongKey());
                     out.writeInt(entry.getIntValue());
                 }
+                out.writeLong(lastCacheId);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -62,6 +72,11 @@ public class PlayerLodTracker {
             int size = in.readInt();
             for (int i = 0; i < size; i++) {
                 sentSectionVersions.put(in.readLong(), in.readInt());
+            }
+            try {
+                lastCacheId = in.readLong();
+            } catch (java.io.EOFException e) {
+                lastCacheId = 0L;
             }
         } catch (Exception e) {
             e.printStackTrace();

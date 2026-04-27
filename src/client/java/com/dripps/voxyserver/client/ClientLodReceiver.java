@@ -1,5 +1,6 @@
 package com.dripps.voxyserver.client;
 
+import com.dripps.voxyserver.Voxyserver;
 import com.dripps.voxyserver.network.LODBulkPayload;
 import com.dripps.voxyserver.network.LODClearPayload;
 import com.dripps.voxyserver.network.LODReadyPayload;
@@ -15,6 +16,7 @@ import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.Holder;
@@ -24,6 +26,8 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Optional;
 
 public class ClientLodReceiver {
@@ -32,7 +36,7 @@ public class ClientLodReceiver {
         // send ready handshake when joining a server
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             ClientLodSettings.prepareForCurrentConnection();
-            ClientPlayNetworking.send(new LODReadyPayload());
+            ClientPlayNetworking.send(new LODReadyPayload(getOrCreateCacheId()));
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
@@ -133,5 +137,31 @@ public class ClientLodReceiver {
     private static void handleClear(LODClearPayload payload) {
         // dimension change clear is handled by voxy itself when the world changes
         // this is a signal from the server to reset any cached state
+    }
+
+    private static long getOrCreateCacheId() {
+        Minecraft minecraft = Minecraft.getInstance();
+        String serverIp = "local";
+        if (minecraft.getCurrentServer() != null && minecraft.getCurrentServer().ip != null) {
+            serverIp = minecraft.getCurrentServer().ip.replaceAll("[^a-zA-Z0-9\\.\\-]", "_");
+        }
+
+        Path voxyDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve(".voxy");
+        Path saveDir = voxyDir.resolve("saves").resolve(serverIp);
+        Path cacheFile = saveDir.resolve("voxyserver.cache.id");
+        try {
+            if (Files.exists(cacheFile)) {
+                return Long.parseLong(Files.readString(cacheFile).trim());
+            } else {
+                Files.createDirectories(saveDir);
+                long newId = new java.util.Random().nextLong();
+                if (newId == 0L) newId = 1L;
+                Files.writeString(cacheFile, String.valueOf(newId));
+                return newId;
+            }
+        } catch (Exception e) {
+            com.dripps.voxyserver.Voxyserver.LOGGER.error("Failed to read/write voxyserver cache id", e);
+            return new java.util.Random().nextLong();
+        }
     }
 }

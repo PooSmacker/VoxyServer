@@ -1,8 +1,8 @@
 {
   "required": true,
   "minVersion": "0.8",
-  "package": "com.dripps.voxyserver.mixin.client",
-  "compatibilityLevel": "JAVA_21",
+  "package": "com.dripps.voxyserver.client.mixin",
+  "compatibilityLevel": "JAVA_25",
   "client": [
   ],
   "injectors": {
@@ -10,5 +10,8 @@
   },
   "overwrites": {
     "requireAnnotations": true
-  }
+  },
+  "mixins": [
+    "VoxyInstanceMixin"
+  ]
 }

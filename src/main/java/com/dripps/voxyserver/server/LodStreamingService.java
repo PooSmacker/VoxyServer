@@ -272,7 +272,7 @@ public class LodStreamingService {
         var tracker = trackers.get(player.getUUID());
         if (tracker == null || !tracker.isReady()) return;
 
-        tracker.reset();
+        tracker.resetScanState();
         Identifier dim = newLevel.dimension().identifier();
         ServerPlayNetworking.send(player, LODClearPayload.clearDimension(dim));
     }
@@ -329,7 +329,7 @@ public class LodStreamingService {
             }
 
             int version = getSectionVersion(dimOrd, key);
-            if (tracker.hasSent(key, version)) continue;
+            if (tracker.hasSent(composeSectionKey(dimOrd, key), version)) continue;
             if (isSectionPendingDirty(dimOrd, key)) continue;
 
             WorldSection section = world.acquireIfExists(key);
@@ -342,7 +342,7 @@ public class LodStreamingService {
                     batch.add(payload);
                     sent++;
                 }
-                tracker.markSent(key, version);
+                tracker.markSent(composeSectionKey(dimOrd, key), version);
             } finally {
                 try {
                     section.release();
@@ -541,7 +541,7 @@ public class LodStreamingService {
                 continue;
             }
 
-            tracker.markSent(sectionKey, version);
+            tracker.markSent(composeSectionKey(dimOrdinals.getOrdinal(dimension), sectionKey), version);
 
             UUID playerId = entry.getKey();
             if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {

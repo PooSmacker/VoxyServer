@@ -55,6 +55,10 @@ public class PlayerLodTracker {
         resetScanStateLocked();
     }
 
+    public synchronized void resetScanState() {
+        resetScanStateLocked();
+    }
+
     public synchronized void invalidate(long sectionKey) {
         sentSectionVersions.remove(sectionKey);
     }

@@ -15,7 +15,7 @@ public class DirtyTracker {
     private final ConcurrentHashMap<DirtySection, Boolean> dirtySections = new ConcurrentHashMap<>();
     private final ChunkVoxelizer voxelizer;
     private final LodStreamingService streamingService;
-    private final int flushInterval;
+    private volatile int flushInterval;
     private int tickCounter = 0;
 
     private record DirtySection(Identifier dimension, int chunkX, int sectionY, int chunkZ) {}
@@ -24,6 +24,10 @@ public class DirtyTracker {
     public DirtyTracker(ChunkVoxelizer voxelizer, LodStreamingService streamingService, int flushInterval) {
         this.voxelizer = voxelizer;
         this.streamingService = streamingService;
+        this.flushInterval = flushInterval;
+    }
+
+    public void updateFlushInterval(int flushInterval) {
         this.flushInterval = flushInterval;
     }
 

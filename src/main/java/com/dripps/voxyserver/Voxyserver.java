@@ -18,9 +18,14 @@ import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+
 public class Voxyserver implements ModInitializer {
     public static final String MOD_ID = "voxyserver";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+    private static final int CONFIG_CHECK_INTERVAL = 20;
 
     private static VoxyServerConfig config;
     private ServerLodEngine lodEngine;
@@ -28,6 +33,8 @@ public class Voxyserver implements ModInitializer {
     private LodStreamingService streamingService;
     private WorldImportCoordinator importCoordinator;
     private DirtyTracker dirtyTracker;
+    private long lastConfigModified;
+    private int configCheckCounter;
 
     public static VoxyServerConfig getConfig() {
         return config;
@@ -64,6 +71,17 @@ public class Voxyserver implements ModInitializer {
                 com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE = new com.dripps.voxyserver.util.ServerStatsTracker(config.debugTrackingInterval);
                 ServerTickEvents.END_SERVER_TICK.register(com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE::tick);
             }
+            try {
+                lastConfigModified = Files.getLastModifiedTime(VoxyServerConfig.getConfigPath()).toMillis();
+            } catch (IOException ignored) {}
+
+            ServerTickEvents.END_SERVER_TICK.register(s -> {
+                if (lodEngine == null) return;
+                if (++configCheckCounter < CONFIG_CHECK_INTERVAL) return;
+                configCheckCounter = 0;
+                checkConfigReload();
+            });
+
             LOGGER.info("VoxyServer engine started for world: {}", worldPath);
         });
 
@@ -88,5 +106,53 @@ public class Voxyserver implements ModInitializer {
                 streamingService.onDimensionChange(player, destination);
             }
         });
+    }
+
+    private void checkConfigReload() {
+        try {
+            var path = VoxyServerConfig.getConfigPath();
+            if (!Files.exists(path)) return;
+            long currentModified = Files.getLastModifiedTime(path).toMillis();
+            if (currentModified == lastConfigModified) return;
+            lastConfigModified = currentModified;
+
+            VoxyServerConfig newConfig = VoxyServerConfig.reload();
+            if (newConfig == null) return;
+
+            applyConfigChanges(config, newConfig);
+            config = newConfig;
+            LOGGER.info("config reloaded successfully");
+        } catch (IOException ignored) {}
+    }
+
+    private void applyConfigChanges(VoxyServerConfig oldCfg, VoxyServerConfig newCfg) {
+        if (oldCfg.generateOnChunkLoad != newCfg.generateOnChunkLoad)
+            LOGGER.info("generateonchunkload changed, requires server restart to take effect");
+        if (oldCfg.dirtyTrackingEnabled != newCfg.dirtyTrackingEnabled)
+            LOGGER.info("dirtytrackingenabled changed, requires server restart to take effect");
+        if (oldCfg.debugTrackingEnabled != newCfg.debugTrackingEnabled)
+            LOGGER.info("debugtrackingenabled changed, requires server restart to take effect");
+
+        if (streamingService != null) {
+            streamingService.updateConfig(
+                    newCfg.lodStreamRadius,
+                    newCfg.maxSectionsPerTickPerPlayer,
+                    newCfg.sectionsPerPacket,
+                    newCfg.tickInterval,
+                    newCfg.dirtyTrackingInterval
+            );
+        }
+
+        if (dirtyTracker != null) {
+            dirtyTracker.updateFlushInterval(newCfg.dirtyTrackingInterval);
+        }
+
+        if (newCfg.workerThreads != oldCfg.workerThreads && lodEngine != null) {
+            lodEngine.updateDedicatedThreadsCount(newCfg.workerThreads);
+        }
+
+        if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {
+            com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE.updateTickInterval(newCfg.debugTrackingInterval);
+        }
     }
 }

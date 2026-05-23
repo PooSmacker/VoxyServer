@@ -41,11 +41,11 @@ public class LodStreamingService {
     private static final int MAX_DIRTY_SECTIONS_PER_DRAIN = 64;
 
     private final ServerLodEngine engine;
-    private final int lodStreamRadius;
-    private final int maxSectionsPerTick;
-    private final int sectionsPerPacket;
-    private final int tickInterval;
-    private final long pendingDirtyTimeoutTicks;
+    private volatile int lodStreamRadius;
+    private volatile int maxSectionsPerTick;
+    private volatile int sectionsPerPacket;
+    private volatile int tickInterval;
+    private volatile long pendingDirtyTimeoutTicks;
     private final DimensionOrdinals dimOrdinals = new DimensionOrdinals();
     private final ConcurrentHashMap<UUID, PlayerLodTracker> trackers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> sectionVersions = new ConcurrentHashMap<>();
@@ -192,6 +192,16 @@ public class LodStreamingService {
         } else {
             loadedChunks.remove(chunkKey);
         }
+    }
+
+    public void updateConfig(int lodStreamRadius, int maxSectionsPerTick,
+                             int sectionsPerPacket, int tickInterval,
+                             int dirtyTrackingInterval) {
+        this.lodStreamRadius = lodStreamRadius;
+        this.maxSectionsPerTick = maxSectionsPerTick;
+        this.sectionsPerPacket = sectionsPerPacket;
+        this.tickInterval = tickInterval;
+        this.pendingDirtyTimeoutTicks = Math.max(dirtyTrackingInterval * 2L, 40L);
     }
 
     public void shutdown() {

@@ -11,11 +11,15 @@ public class ServerStatsTracker {
     private final LongAdder chunksVoxelized = new LongAdder();
     private final LongAdder sectionsStreamed = new LongAdder();
     private final LongAdder engineActions = new LongAdder();
-    private final int tickInterval;
+    private volatile int tickInterval;
     private int ticks;
 
     public ServerStatsTracker(int interval) {
         this.tickInterval = interval;
+    }
+
+    public void updateTickInterval(int tickInterval) {
+        this.tickInterval = tickInterval;
     }
 
     public void markVoxelized() {

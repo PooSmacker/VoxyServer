@@ -6,7 +6,7 @@
   "description": "",
   "authors": ["dripps"],
   "contact": {
-    "homepage": "https://modrinth.com/mod/voxyserver",
+    "homepage": "https://modrinth.com/plugin/voxy-server-side",
     "issues": "https://github.com/poosmacker/voxyserver/issues",
     "sources": "https://github.com/poosmacker/voxyserver"
   },
@@ -37,10 +37,10 @@
   "depends": {
     "fabricloader": ">=${loader_version}",
     "fabric-api": "*",
-    "minecraft": "${minecraft_version}"
+    "minecraft": "${minecraft_version}",
+    "voxy": "=0.2.9-alpha"
   },
   "suggests": {
-    "voxy": "*",
     "modmenu": "*",
     "cloth-config": "*"
   },
@@ -48,7 +48,7 @@
     "modmenu": {
       "links": {
         "modmenu.discord": "https://discord.gg/fKQqFjNP2W",
-        "modmenu.modrinth": "https://modrinth.com/mod/voxyserver"
+        "modmenu.modrinth": "https://modrinth.com/plugin/voxy-server-side"
       },
       "update_checker": false
     }

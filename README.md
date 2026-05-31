@@ -2,7 +2,7 @@
 
 a fabric server side mod that voxelizes chunks into LODs using [voxy](https://github.com/MCRcortex/voxy) and streams them to connected clients. players with voxy installed will receive LOD data from the server automatically, no client side world scanning/loading needed.
 
-**Latest: minecraft 1.21.11 | fabric**
+**Latest: minecraft 1.21.10 | fabric**
 
 ## how it works
 
@@ -35,7 +35,7 @@ due to voxy's license, the source and binary can't be included in this repo. you
    ```bash
    cd ..
    mkdir libs
-   cp voxy/build/libs/voxy-*.jar libs/voxy.jar
+   cp voxy/build/libs/voxy-*.jar libs/voxy-1.21.10.jar
    ```
 
 4. build voxyserver:
@@ -66,7 +66,7 @@ the output jar will be in `build/libs/`.
    ```cmd
    cd ..
    mkdir libs
-   for %f in (voxy\build\libs\voxy-*.jar) do copy "%f" libs\voxy.jar
+   for %f in (voxy\build\libs\voxy-*.jar) do copy "%f" libs\voxy-1.21.10.jar
    ```
 
 4. build voxyserver:
@@ -78,7 +78,7 @@ the output jar will be in `build\libs\`.
 
 ## installation
 
-drop the voxyserver, voxy & sodium jar's into the server's `mods/` folder. no other server side dependencies are needed.
+drop the voxyserver, voxy & sodium jar's into the server's `mods/` folder. voxy is a hard server-side requirement for this port because the server engine uses voxy's storage and import APIs directly. build and install the matching voxy `0.2.9-alpha` jar from the steps above; installing voxyserver by itself will not work.
 
 clients just need voxy installed as normal along with voxyserver.
 

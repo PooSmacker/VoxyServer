@@ -52,10 +52,23 @@ dependencies {
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    modImplementation files("libs/voxy-1.21.11.jar")
-    modCompileOnly "maven.modrinth:sodium:mc1.21.11-0.8.6-fabric"
-    modCompileOnly "com.terraformersmc:modmenu:17.0.0"
-    modCompileOnly "me.shedaniel.cloth:cloth-config-fabric:21.11.153"
+    modImplementation files("libs/voxy-1.21.10.jar")
+    modCompileOnly "maven.modrinth:sodium:mc1.21.10-0.7.3-fabric"
+    modRuntimeOnly "maven.modrinth:sodium:mc1.21.10-0.7.3-fabric"
+    modCompileOnly "com.terraformersmc:modmenu:16.0.1"
+    modCompileOnly "me.shedaniel.cloth:cloth-config-fabric:20.0.149"
+
+    // Loom's dev launch does not put Voxy's nested libraries on the runtime classpath.
+    // Mirror Voxy's embedded jars here so runServer catches VoxyServer runtime issues.
+    runtimeOnly "org.apache.commons:commons-pool2:2.12.0"
+    runtimeOnly "redis.clients:jedis:5.1.0"
+    runtimeOnly "org.lz4:lz4-java:1.8.0"
+    runtimeOnly "org.rocksdb:rocksdbjni:10.2.1"
+    runtimeOnly "org.tukaani:xz:1.10"
+    runtimeOnly "org.lwjgl:lwjgl-lmdb:3.3.3"
+    runtimeOnly "org.lwjgl:lwjgl-lmdb::natives-linux"
+    runtimeOnly "org.lwjgl:lwjgl-zstd:3.3.3"
+    runtimeOnly "org.lwjgl:lwjgl-zstd::natives-linux"
 
     // lwjgl is bundled with the client but not the dedicated server
     // voxy's Mapper uses MemoryUtil for off-heap allocation

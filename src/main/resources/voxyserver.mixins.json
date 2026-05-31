@@ -4,7 +4,8 @@
   "package": "com.dripps.voxyserver.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "LevelChunkMixin"
+    "LevelChunkMixin",
+    "VoxySerializationMixin"
   ],
   "injectors": {
     "defaultRequire": 1

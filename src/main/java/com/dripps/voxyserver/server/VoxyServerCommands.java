@@ -7,18 +7,20 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.permissions.Permissions;
 
 import java.util.function.Supplier;
 
 public final class VoxyServerCommands {
+    private static final int COMMANDS_ADMIN_PERMISSION_LEVEL = 2;
+    private static final String COORDINATOR_NOT_READY = "import coordinator is not ready";
+
     private VoxyServerCommands() {
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, Supplier<WorldImportCoordinator> coordinatorSupplier) {
         dispatcher.register(
                 Commands.literal("voxyserver")
-                        .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+                        .requires(source -> source.hasPermission(COMMANDS_ADMIN_PERMISSION_LEVEL))
                         .then(Commands.literal("import")
                                 .then(Commands.literal("existing")
                                         .then(Commands.literal("all")
@@ -30,7 +32,7 @@ public final class VoxyServerCommands {
                                                         .suggests((context, builder) -> {
                                                             java.util.List<String> dimensions = new java.util.ArrayList<>();
                                                             for (ServerLevel level : context.getSource().getServer().getAllLevels()) {
-                                                                dimensions.add(level.dimension().identifier().toString());
+                                                                dimensions.add(level.dimension().location().toString());
                                                             }
                                                             return SharedSuggestionProvider.suggest(dimensions, builder);
                                                         })
@@ -46,12 +48,10 @@ public final class VoxyServerCommands {
         );
     }
 
-    static String ballsack = "import coordinator is not ready";
-
     private static int executeAll(CommandSourceStack source, Supplier<WorldImportCoordinator> coordinatorSupplier) {
         WorldImportCoordinator coordinator = coordinatorSupplier.get();
         if (coordinator == null) {
-            source.sendFailure(Component.literal(ballsack));
+            source.sendFailure(Component.literal(COORDINATOR_NOT_READY));
             return 0;
         }
         return coordinator.startAll(source) ? 1 : 0;
@@ -60,7 +60,7 @@ public final class VoxyServerCommands {
     private static int executeCurrent(CommandSourceStack source, Supplier<WorldImportCoordinator> coordinatorSupplier) {
         WorldImportCoordinator coordinator = coordinatorSupplier.get();
         if (coordinator == null) {
-            source.sendFailure(Component.literal(ballsack));
+            source.sendFailure(Component.literal(COORDINATOR_NOT_READY));
             return 0;
         }
         return coordinator.startCurrent(source) ? 1 : 0;
@@ -69,7 +69,7 @@ public final class VoxyServerCommands {
     private static int executeDimension(CommandSourceStack source, Supplier<WorldImportCoordinator> coordinatorSupplier, String dimensionId) {
         WorldImportCoordinator coordinator = coordinatorSupplier.get();
         if (coordinator == null) {
-            source.sendFailure(Component.literal(ballsack));
+            source.sendFailure(Component.literal(COORDINATOR_NOT_READY));
             return 0;
         }
 
@@ -84,7 +84,7 @@ public final class VoxyServerCommands {
     private static int executeStatus(CommandSourceStack source, Supplier<WorldImportCoordinator> coordinatorSupplier) {
         WorldImportCoordinator coordinator = coordinatorSupplier.get();
         if (coordinator == null) {
-            source.sendFailure(Component.literal(ballsack));
+            source.sendFailure(Component.literal(COORDINATOR_NOT_READY));
             return 0;
         }
         source.sendSuccess(() -> Component.literal(coordinator.getStatusSummary()), false);
@@ -94,7 +94,7 @@ public final class VoxyServerCommands {
     private static int executeCancel(CommandSourceStack source, Supplier<WorldImportCoordinator> coordinatorSupplier) {
         WorldImportCoordinator coordinator = coordinatorSupplier.get();
         if (coordinator == null) {
-            source.sendFailure(Component.literal(ballsack));
+            source.sendFailure(Component.literal(COORDINATOR_NOT_READY));
             return 0;
         }
         return coordinator.cancel(source) ? 1 : 0;
@@ -102,7 +102,7 @@ public final class VoxyServerCommands {
 
     private static ServerLevel findLevel(CommandSourceStack source, String dimensionId) {
         for (ServerLevel level : source.getServer().getAllLevels()) {
-            if (level.dimension().identifier().toString().equals(dimensionId)) {
+            if (level.dimension().location().toString().equals(dimensionId)) {
                 return level;
             }
         }

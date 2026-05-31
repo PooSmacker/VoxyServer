@@ -5,14 +5,14 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 // wraps preserialized LODBulkPayload bytes so the heavy encoding
 // happens on the streaming thread instead of the tick thread
 public record PreSerializedLodPayload(byte[] data) implements CustomPacketPayload {
 
     public static final Type<PreSerializedLodPayload> TYPE =
-            new Type<>(Identifier.parse("voxyserver:lod_preserialized"));
+            new Type<>(ResourceLocation.parse("voxyserver:lod_preserialized"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, PreSerializedLodPayload> CODEC =
             StreamCodec.of(PreSerializedLodPayload::write, PreSerializedLodPayload::read);

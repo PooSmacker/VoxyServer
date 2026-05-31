@@ -3,12 +3,12 @@ package com.dripps.voxyserver.network;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 // single level 0 LOD section sent from server to client
 // contains: dimension id, section position key, a LUT of vanilla registry ids, and an index array
 public record LODSectionPayload(
-        Identifier dimension,
+        ResourceLocation dimension,
         long sectionKey,
         int[] lutBlockStateIds,
         int[] lutBiomeIds,
@@ -17,13 +17,13 @@ public record LODSectionPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<LODSectionPayload> TYPE =
-            new Type<>(Identifier.parse("voxyserver:lod_section"));
+            new Type<>(ResourceLocation.parse("voxyserver:lod_section"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, LODSectionPayload> CODEC =
             StreamCodec.of(LODSectionPayload::write, LODSectionPayload::read);
 
     private static void write(RegistryFriendlyByteBuf buf, LODSectionPayload payload) {
-        buf.writeIdentifier(payload.dimension);
+        buf.writeResourceLocation(payload.dimension);
         buf.writeLong(payload.sectionKey);
 
         int lutLen = payload.lutBlockStateIds.length;
@@ -52,7 +52,7 @@ public record LODSectionPayload(
     }
 
     private static LODSectionPayload read(RegistryFriendlyByteBuf buf) {
-        Identifier dimension = buf.readIdentifier();
+        ResourceLocation dimension = buf.readResourceLocation();
         long sectionKey = buf.readLong();
 
         int lutLen = buf.readVarInt();

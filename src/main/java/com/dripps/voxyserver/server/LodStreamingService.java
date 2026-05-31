@@ -333,6 +333,8 @@ public class LodStreamingService {
         int sent = 0;
 
         while (sent < effectiveMaxSections) {
+            lastStreamHeartbeat = System.nanoTime();
+
             long key = tracker.nextSectionKeyToScan(scanTick, IDLE_SCAN_RESTART_TICKS);
             if (key == PlayerLodTracker.NO_SECTION_KEY) {
                 break;

@@ -1,14 +1,19 @@
 package com.dripps.voxyserver.server;
 
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import me.cortex.voxy.common.world.WorldEngine;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 
 public class PlayerLodTracker {
     public static final long NO_SECTION_KEY = -1L;
 
-    private final Long2IntOpenHashMap sentSectionVersions = new Long2IntOpenHashMap();
+    private final Long2LongOpenHashMap sentSectionHashes = new Long2LongOpenHashMap();
     private volatile boolean ready = false;
+    private volatile boolean protocolOk = false;
+
+    private Identifier awaitingManifestDim;
+    private long manifestDeadlineTick;
     private int lastChunkX;
     private int lastChunkZ;
 
@@ -31,7 +36,7 @@ public class PlayerLodTracker {
     private long nextFullRescanTick;
 
     public PlayerLodTracker() {
-        this.sentSectionVersions.defaultReturnValue(-1);
+        this.sentSectionHashes.defaultReturnValue(0L);
     }
 
     public boolean isReady() {
@@ -42,16 +47,24 @@ public class PlayerLodTracker {
         this.ready = ready;
     }
 
-    public synchronized boolean hasSent(long sectionKey, int version) {
-        return sentSectionVersions.get(sectionKey) == version;
+    public boolean isProtocolOk() {
+        return protocolOk;
     }
 
-    public synchronized void markSent(long sectionKey, int version) {
-        sentSectionVersions.put(sectionKey, version);
+    public void setProtocolOk(boolean protocolOk) {
+        this.protocolOk = protocolOk;
+    }
+
+    public synchronized boolean hasSent(long sectionKey, long hash) {
+        return sentSectionHashes.containsKey(sectionKey) && sentSectionHashes.get(sectionKey) == hash;
+    }
+
+    public synchronized void markSent(long sectionKey, long hash) {
+        sentSectionHashes.put(sectionKey, hash);
     }
 
     public synchronized void reset() {
-        sentSectionVersions.clear();
+        sentSectionHashes.clear();
         resetScanStateLocked();
     }
 
@@ -60,7 +73,27 @@ public class PlayerLodTracker {
     }
 
     public synchronized void invalidate(long sectionKey) {
-        sentSectionVersions.remove(sectionKey);
+        sentSectionHashes.remove(sectionKey);
+    }
+
+    public synchronized void beginManifestWait(Identifier dimension, long deadlineTick) {
+        this.awaitingManifestDim = dimension;
+        this.manifestDeadlineTick = deadlineTick;
+    }
+
+    public synchronized void clearManifestWait() {
+        this.awaitingManifestDim = null;
+    }
+
+    // true if the scan should be gated waiting for this dims manifest. opens the gate once the deadline passes
+    public synchronized boolean isManifestGated(Identifier dimension, long currentTick) {
+        if (awaitingManifestDim == null) return false;
+        if (!awaitingManifestDim.equals(dimension)) return false;
+        if (currentTick >= manifestDeadlineTick) {
+            awaitingManifestDim = null;
+            return false;
+        }
+        return true;
     }
 
     public int getLastChunkX() {
@@ -77,7 +110,7 @@ public class PlayerLodTracker {
     }
 
     public synchronized int sentCount() {
-        return sentSectionVersions.size();
+        return sentSectionHashes.size();
     }
 
     public synchronized boolean prepareScan(int centerSecX, int centerSecZ,

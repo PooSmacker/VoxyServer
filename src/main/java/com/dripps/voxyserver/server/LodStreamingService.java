@@ -3,11 +3,15 @@ package com.dripps.voxyserver.server;
 import com.dripps.voxyserver.Voxyserver;
 import com.dripps.voxyserver.network.LODBulkPayload;
 import com.dripps.voxyserver.network.LODClearPayload;
+import com.dripps.voxyserver.network.LODHandshakePayload;
+import com.dripps.voxyserver.network.LODManifestPayload;
 import com.dripps.voxyserver.network.LODPreferencesPayload;
+import com.dripps.voxyserver.network.LODProtocolPayload;
 import com.dripps.voxyserver.network.LODReadyPayload;
 import com.dripps.voxyserver.network.LODSectionPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
+import com.dripps.voxyserver.network.VoxyServerNetworking;
 import com.dripps.voxyserver.util.IdRemapper;
 import it.unimi.dsi.fastutil.longs.Long2ShortOpenHashMap;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -17,8 +21,10 @@ import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -39,6 +45,8 @@ public class LodStreamingService {
     private static final long INITIAL_LOAD_GRACE_TICKS = 20L;
     private static final int INITIAL_LOAD_MIN_CHUNKS_AT_DEADLINE = 3;
     private static final int MAX_DIRTY_SECTIONS_PER_DRAIN = 64;
+    // we have a grace window for the client manifest to arrive before the scan falls back to a full send
+    private static final long MANIFEST_TIMEOUT_TICKS = 60L;
 
     private final ServerLodEngine engine;
     private volatile int lodStreamRadius;
@@ -46,9 +54,11 @@ public class LodStreamingService {
     private volatile int sectionsPerPacket;
     private volatile int tickInterval;
     private volatile long pendingDirtyTimeoutTicks;
+    private volatile boolean hashSyncEnabled;
     private final DimensionOrdinals dimOrdinals = new DimensionOrdinals();
     private final ConcurrentHashMap<UUID, PlayerLodTracker> trackers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> sectionVersions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, long[]> hashCacheByKey = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> pendingDirtySections = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> initialLoadSections = new ConcurrentHashMap<>();
     private final Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
@@ -115,6 +125,12 @@ public class LodStreamingService {
         return ((long)(dimOrdinal & 0xFF) << 56) | ((long)(chunkX & 0x0FFFFFFF) << 28) | (chunkZ & 0x0FFFFFFFL);
     }
 
+    private static Component clientOutOfDateMessage() {
+        return Component.literal("[VoxyServer] ").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                .append(Component.literal("your VoxyServer client is out of date. update the mod to use LODs from this server.")
+                        .withStyle(ChatFormatting.RED));
+    }
+
     public LodStreamingService(ServerLodEngine engine, com.dripps.voxyserver.config.VoxyServerConfig config) {
         this.engine = engine;
         this.lodStreamRadius = config.lodStreamRadius;
@@ -122,6 +138,7 @@ public class LodStreamingService {
         this.sectionsPerPacket = config.sectionsPerPacket;
         this.tickInterval = config.tickInterval;
         this.pendingDirtyTimeoutTicks = Math.max(config.dirtyTrackingInterval * 2L, 40L);
+        this.hashSyncEnabled = config.hashSyncEnabled;
         this.engine.setDirtySectionListener(this::onWorldSectionDirty);
     }
 
@@ -137,11 +154,56 @@ public class LodStreamingService {
 
         ServerPlayNetworking.registerGlobalReceiver(LODReadyPayload.TYPE, (payload, context) -> {
             var tracker = trackers.get(context.player().getUUID());
-            if (tracker != null) {
-                tracker.setReady(true);
-                Voxyserver.LOGGER.info("player {} is ready for LOD streaming", context.player().getName().getString());
-                ServerPlayNetworking.send(context.player(),
-                        new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
+            if (tracker == null) return;
+            ServerPlayer player = context.player();
+            tracker.setReady(true);
+            tracker.setProtocolOk(false);
+            if (!ServerPlayNetworking.canSend(player, LODProtocolPayload.TYPE)) {
+                Voxyserver.LOGGER.warn("player {} has an outdated VoxyServer client (no protocol handshake), LOD streaming disabled", player.getName().getString());
+                player.sendSystemMessage(clientOutOfDateMessage());
+                return;
+            }
+            ServerPlayNetworking.send(player, new LODProtocolPayload(VoxyServerNetworking.PROTOCOL_VERSION));
+            ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(LODHandshakePayload.TYPE, (payload, context) -> {
+            var tracker = trackers.get(context.player().getUUID());
+            if (tracker == null) return;
+            ServerPlayer player = context.player();
+            int clientProto = payload.protocol();
+            int serverProto = VoxyServerNetworking.PROTOCOL_VERSION;
+            if (clientProto == serverProto) {
+                tracker.setProtocolOk(true);
+                if (hashSyncEnabled) {
+                    Identifier dim = player.level().dimension().identifier();
+                    tracker.beginManifestWait(dim, currentTick + MANIFEST_TIMEOUT_TICKS);
+                }
+                Voxyserver.LOGGER.info("player {} ready for LOD streaming, protocol {}", player.getName().getString(), serverProto);
+            } else if (clientProto < serverProto) {
+                tracker.setProtocolOk(false);
+                Voxyserver.LOGGER.warn("player {} VoxyServer client out of date (client protocol {}, server {}), LOD streaming disabled",
+                        player.getName().getString(), clientProto, serverProto);
+                player.sendSystemMessage(clientOutOfDateMessage());
+            } else {
+                tracker.setProtocolOk(false);
+                Voxyserver.LOGGER.warn("this server's VoxyServer is out of date (server protocol {}, client {}) for player {}, LOD streaming disabled",
+                        serverProto, clientProto, player.getName().getString());
+            }
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(LODManifestPayload.TYPE, (payload, context) -> {
+            if (!hashSyncEnabled) return;
+            var tracker = trackers.get(context.player().getUUID());
+            if (tracker == null) return;
+            int dimOrd = dimOrdinals.getOrdinal(payload.dimension());
+            long[] keys = payload.keys();
+            long[] hashes = payload.hashes();
+            for (int i = 0; i < keys.length; i++) {
+                tracker.markSent(composeSectionKey(dimOrd, keys[i]), hashes[i]);
+            }
+            if (payload.complete()) {
+                tracker.clearManifestWait();
             }
         });
 
@@ -196,12 +258,13 @@ public class LodStreamingService {
 
     public void updateConfig(int lodStreamRadius, int maxSectionsPerTick,
                              int sectionsPerPacket, int tickInterval,
-                             int dirtyTrackingInterval) {
+                             int dirtyTrackingInterval, boolean hashSyncEnabled) {
         this.lodStreamRadius = lodStreamRadius;
         this.maxSectionsPerTick = maxSectionsPerTick;
         this.sectionsPerPacket = sectionsPerPacket;
         this.tickInterval = tickInterval;
         this.pendingDirtyTimeoutTicks = Math.max(dirtyTrackingInterval * 2L, 40L);
+        this.hashSyncEnabled = hashSyncEnabled;
     }
 
     public void shutdown() {
@@ -211,6 +274,35 @@ public class LodStreamingService {
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    public record PlayerStat(String name, int sentCount, int chunkX, int chunkZ) {}
+
+    public record StreamingStats(int players, int trackedSections, int hashCacheSize,
+                                 int pendingDirty, int queuedDirty, int loadedChunks,
+                                 List<PlayerStat> perPlayer) {}
+
+    public StreamingStats snapshotStats(MinecraftServer mcServer) {
+        List<PlayerStat> perPlayer = new ArrayList<>();
+        for (var entry : trackers.entrySet()) {
+            UUID uuid = entry.getKey();
+            PlayerLodTracker tracker = entry.getValue();
+            String name = uuid.toString();
+            if (mcServer != null) {
+                ServerPlayer player = mcServer.getPlayerList().getPlayer(uuid);
+                if (player != null) name = player.getName().getString();
+            }
+            perPlayer.add(new PlayerStat(name, tracker.sentCount(),
+                    tracker.getLastChunkX(), tracker.getLastChunkZ()));
+        }
+        return new StreamingStats(
+                trackers.size(),
+                sectionVersions.size(),
+                hashCacheByKey.size(),
+                pendingDirtySections.size(),
+                queuedDirtySections.size(),
+                loadedChunks.size(),
+                perPlayer);
     }
 
     // snapshot player state on the tick thread for async processing
@@ -232,7 +324,7 @@ public class LodStreamingService {
         List<PlayerSnapshot> snapshots = new ArrayList<>();
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             var tracker = trackers.get(player.getUUID());
-            if (tracker == null || !tracker.isReady() || !tracker.isLodEnabled()) continue;
+            if (tracker == null || !tracker.isReady() || !tracker.isProtocolOk() || !tracker.isLodEnabled()) continue;
 
             tracker.updatePosition(player);
             ServerLevel level = player.level();
@@ -303,6 +395,7 @@ public class LodStreamingService {
 
     private void streamForSnapshot(MinecraftServer server, PlayerSnapshot snap, PlayerLodTracker tracker) {
         if (corruptedDimensions.contains(snap.dimension)) return;
+        if (hashSyncEnabled && tracker.isManifestGated(snap.dimension, currentTick)) return;
         currentStreamDimension = snap.dimension;
         WorldEngine world = engine.getOrCreate(snap.worldId, snap.dimension);
         if (world == null) return;
@@ -340,9 +433,13 @@ public class LodStreamingService {
                 break;
             }
 
+            long composite = composeSectionKey(dimOrd, key);
             int version = getSectionVersion(dimOrd, key);
-            if (tracker.hasSent(composeSectionKey(dimOrd, key), version)) continue;
             if (isSectionPendingDirty(dimOrd, key)) continue;
+
+            // we cn js skip without acquiring when the cached hash is current and the client already has it
+            long[] cached = hashCacheByKey.get(composite);
+            if (cached != null && cached[0] == version && tracker.hasSent(composite, cached[1])) continue;
 
             WorldSection section = world.acquireIfExists(key);
             if (section == null) continue;
@@ -351,10 +448,14 @@ public class LodStreamingService {
             try {
                 LODSectionPayload payload = serializeSection(section, snap.dimension, mapper, snap.biomeRegistry);
                 if (payload != null) {
-                    batch.add(payload);
-                    sent++;
+                    long hash = payload.contentHash();
+                    hashCacheByKey.put(composite, new long[]{version, hash});
+                    if (!tracker.hasSent(composite, hash)) {
+                        batch.add(payload);
+                        sent++;
+                        tracker.markSent(composite, hash);
+                    }
                 }
-                tracker.markSent(composeSectionKey(dimOrd, key), version);
             } finally {
                 try {
                     section.release();
@@ -378,6 +479,12 @@ public class LodStreamingService {
                 packets.add(PreSerializedLodPayload.fromBulk(new LODBulkPayload(dim, chunk), server.registryAccess()));
             }
             List<PreSerializedLodPayload> preEncoded = List.copyOf(packets);
+
+            if (Voxyserver.LOGGER.isDebugEnabled()) {
+                int totalBytes = 0;
+                for (PreSerializedLodPayload pkt : preEncoded) totalBytes += pkt.data().length;
+                Voxyserver.LOGGER.debug("hashsync stream player {} sections {} bytes {}", playerId, toSend.size(), totalBytes);
+            }
 
             server.execute(() -> {
                 ServerPlayer player = server.getPlayerList().getPlayer(playerId);
@@ -422,7 +529,50 @@ public class LodStreamingService {
             lutLight[idx] = (byte) IdRemapper.getLightFromMapping(mappingId);
         }
 
-        return new LODSectionPayload(dimension, section.key, lutBlockStateIds, lutBiomeIds, lutLight, indexArray);
+        long contentHash = computeContentHash(lutBlockStateIds, lutBiomeIds, lutLight, indexArray);
+        return new LODSectionPayload(dimension, section.key, lutBlockStateIds, lutBiomeIds, lutLight, indexArray, contentHash);
+    }
+
+    // canonical content fingerprint independent of lut assembly order
+    // sort lut slots by blockstate biome light, then hash the sorted table plus per voxel sorted slot
+    private static long computeContentHash(int[] lutBlockStateIds, int[] lutBiomeIds, byte[] lutLight, short[] indexArray) {
+        int lutLen = lutBlockStateIds.length;
+        Integer[] order = new Integer[lutLen];
+        for (int i = 0; i < lutLen; i++) order[i] = i;
+        Arrays.sort(order, (a, b) -> {
+            if (lutBlockStateIds[a] != lutBlockStateIds[b]) return Integer.compare(lutBlockStateIds[a], lutBlockStateIds[b]);
+            if (lutBiomeIds[a] != lutBiomeIds[b]) return Integer.compare(lutBiomeIds[a], lutBiomeIds[b]);
+            return Integer.compare(lutLight[a] & 0xFF, lutLight[b] & 0xFF);
+        });
+        int[] remap = new int[lutLen];
+        for (int p = 0; p < lutLen; p++) remap[order[p]] = p;
+
+        long h = lutLen;
+        for (int p = 0; p < lutLen; p++) {
+            int s = order[p];
+            h = mix(h, lutBlockStateIds[s] & 0xFFFFFFFFL);
+            h = mix(h, lutBiomeIds[s] & 0xFFFFFFFFL);
+            h = mix(h, lutLight[s] & 0xFFL);
+        }
+        for (short slot : indexArray) {
+            h = mix(h, remap[slot & 0xFFFF]);
+        }
+        return fmix64(h ^ ((long) indexArray.length));
+    }
+
+    private static long mix(long h, long v) {
+        h ^= fmix64(v);
+        h = Long.rotateLeft(h, 27) * 0x9E3779B97F4A7C15L + 0x165667B19E3779F9L;
+        return h;
+    }
+
+    private static long fmix64(long k) {
+        k ^= k >>> 33;
+        k *= 0xff51afd7ed558ccdL;
+        k ^= k >>> 33;
+        k *= 0xc4ceb9fe1a85ec53L;
+        k ^= k >>> 33;
+        return k;
     }
 
     private int getCachedBiomeId(Mapper mapper, long mappingId, Registry<Biome> biomeRegistry) {
@@ -535,12 +685,16 @@ public class LodStreamingService {
         int worldSecX = WorldEngine.getX(sectionKey);
         int worldSecZ = WorldEngine.getZ(sectionKey);
 
+        long composite = composeSectionKey(dimOrdinals.getOrdinal(dimension), sectionKey);
+        long hash = payload.contentHash();
+        hashCacheByKey.put(composite, new long[]{version, hash});
+
         PreSerializedLodPayload preSerialized = PreSerializedLodPayload.fromBulk(
                 new LODBulkPayload(dimension, List.of(payload)), level.registryAccess());
 
         for (var entry : trackers.entrySet()) {
             PlayerLodTracker tracker = entry.getValue();
-            if (!tracker.isReady() || !tracker.isLodEnabled()) {
+            if (!tracker.isReady() || !tracker.isProtocolOk() || !tracker.isLodEnabled()) {
                 continue;
             }
 
@@ -553,7 +707,7 @@ public class LodStreamingService {
                 continue;
             }
 
-            tracker.markSent(composeSectionKey(dimOrdinals.getOrdinal(dimension), sectionKey), version);
+            tracker.markSent(composite, hash);
 
             UUID playerId = entry.getKey();
             if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {

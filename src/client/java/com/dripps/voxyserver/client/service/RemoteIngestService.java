@@ -1,6 +1,7 @@
 package com.dripps.voxyserver.client.service;
 
 import me.cortex.voxy.common.Logger;
+import com.dripps.voxyserver.client.ClientLodHashStore;
 import com.dripps.voxyserver.network.LODSectionPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import me.cortex.voxy.common.thread.Service;
@@ -23,7 +24,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class RemoteIngestService {
 
-    private record IngestTask(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess) {}
+    private record IngestTask(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {}
 
     private final Service service;
     private final ConcurrentLinkedDeque<IngestTask> ingestQueue = new ConcurrentLinkedDeque<>();
@@ -84,6 +85,7 @@ public class RemoteIngestService {
                     }
                 }
             }
+            ClientLodHashStore.get().put(task.worldId(), section.sectionKey(), section.contentHash());
         }
     }
 
@@ -105,7 +107,7 @@ public class RemoteIngestService {
         return remapped;
     }
 
-    public void enqueueIngest(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess) {
+    public void enqueueIngest(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {
         if (!this.service.isLive()) return;
 
         if (!engine.isLive()) {
@@ -113,7 +115,7 @@ public class RemoteIngestService {
             return;
         }
 
-        this.ingestQueue.add(new IngestTask(engine, raw, registryAccess));
+        this.ingestQueue.add(new IngestTask(engine, raw, registryAccess, worldId));
 
         try {
             this.service.execute();

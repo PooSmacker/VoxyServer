@@ -5,15 +5,17 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
-// single level 0 LOD section sent from server to client
+// single level 0 lod section sent from server to client
 // contains: dimension id, section position key, a LUT of vanilla registry ids, and an index array
+// contentHash is the canonical content fingerprint the client persists for hash sync
 public record LODSectionPayload(
         Identifier dimension,
         long sectionKey,
         int[] lutBlockStateIds,
         int[] lutBiomeIds,
         byte[] lutLight,
-        short[] indexArray
+        short[] indexArray,
+        long contentHash
 ) implements CustomPacketPayload {
 
     public static final Type<LODSectionPayload> TYPE =
@@ -25,6 +27,7 @@ public record LODSectionPayload(
     private static void write(RegistryFriendlyByteBuf buf, LODSectionPayload payload) {
         buf.writeIdentifier(payload.dimension);
         buf.writeLong(payload.sectionKey);
+        buf.writeLong(payload.contentHash);
 
         int lutLen = payload.lutBlockStateIds.length;
         buf.writeVarInt(lutLen);
@@ -54,6 +57,7 @@ public record LODSectionPayload(
     private static LODSectionPayload read(RegistryFriendlyByteBuf buf) {
         Identifier dimension = buf.readIdentifier();
         long sectionKey = buf.readLong();
+        long contentHash = buf.readLong();
 
         int lutLen = buf.readVarInt();
         int[] blockStateIds = new int[lutLen];
@@ -78,7 +82,7 @@ public record LODSectionPayload(
             }
         }
 
-        return new LODSectionPayload(dimension, sectionKey, blockStateIds, biomeIds, light, indexArray);
+        return new LODSectionPayload(dimension, sectionKey, blockStateIds, biomeIds, light, indexArray, contentHash);
     }
 
     @Override

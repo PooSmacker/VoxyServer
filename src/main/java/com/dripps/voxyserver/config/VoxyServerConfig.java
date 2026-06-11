@@ -25,6 +25,7 @@ public class VoxyServerConfig {
     public int dirtyTrackingInterval = 40;
     public boolean debugTrackingEnabled = false;
     public int debugTrackingInterval = 200;
+    public boolean hashSyncEnabled = true;
 
     public static Path getConfigPath() {
         return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
@@ -83,6 +84,10 @@ public class VoxyServerConfig {
         VoxyServerConfig config = new VoxyServerConfig();
         config.save();
         return config;
+    }
+
+    public VoxyServerConfig copy() {
+        return GSON.fromJson(GSON.toJson(this), VoxyServerConfig.class);
     }
 
     public void save() {

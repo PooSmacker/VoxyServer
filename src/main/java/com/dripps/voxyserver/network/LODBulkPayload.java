@@ -25,6 +25,7 @@ public record LODBulkPayload(
         buf.writeVarInt(payload.sections.size());
         for (LODSectionPayload section : payload.sections) {
             buf.writeLong(section.sectionKey());
+            buf.writeLong(section.contentHash());
             int lutLen = section.lutBlockStateIds().length;
             buf.writeVarInt(lutLen);
             for (int i = 0; i < lutLen; i++) {
@@ -58,6 +59,7 @@ public record LODBulkPayload(
         List<LODSectionPayload> sections = new ArrayList<>(count);
         for (int s = 0; s < count; s++) {
             long sectionKey = buf.readLong();
+            long contentHash = buf.readLong();
             int lutLen = buf.readVarInt();
             int[] blockStateIds = new int[lutLen];
             int[] biomeIds = new int[lutLen];
@@ -79,7 +81,7 @@ public record LODBulkPayload(
                     indexArray[idx] = (short) ((packed >> (ei * bitsPerEntry)) & mask);
                 }
             }
-            sections.add(new LODSectionPayload(dimension, sectionKey, blockStateIds, biomeIds, light, indexArray));
+            sections.add(new LODSectionPayload(dimension, sectionKey, blockStateIds, biomeIds, light, indexArray, contentHash));
         }
         return new LODBulkPayload(dimension, sections);
     }

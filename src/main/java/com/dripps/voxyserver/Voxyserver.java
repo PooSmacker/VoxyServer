@@ -14,20 +14,32 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Voxyserver implements ModInitializer {
     public static final String MOD_ID = "voxyserver";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private static final int CONFIG_CHECK_INTERVAL = 20;
+    private static final int STATS_BROADCAST_INTERVAL = 20;
 
     private static VoxyServerConfig config;
+    private final Set<UUID> statsSubscribers = ConcurrentHashMap.newKeySet();
+    private int statsBroadcastCounter;
     private ServerLodEngine lodEngine;
     private ChunkVoxelizer chunkVoxelizer;
     private LodStreamingService streamingService;
@@ -40,6 +52,32 @@ public class Voxyserver implements ModInitializer {
         return config;
     }
 
+    public LodStreamingService getStreamingService() {
+        return streamingService;
+    }
+
+    public WorldImportCoordinator getImportCoordinator() {
+        return importCoordinator;
+    }
+
+    public void addStatsSubscriber(UUID uuid) {
+        statsSubscribers.add(uuid);
+    }
+
+    public boolean removeStatsSubscriber(UUID uuid) {
+        return statsSubscribers.remove(uuid);
+    }
+
+    public List<String> applyConfigFromCommand(VoxyServerConfig candidate) {
+        List<String> notes = applyConfigChanges(config, candidate);
+        config = candidate;
+        candidate.save();
+        try {
+            lastConfigModified = Files.getLastModifiedTime(VoxyServerConfig.getConfigPath()).toMillis();
+        } catch (IOException ignored) {}
+        return notes;
+    }
+
     @Override
     public void onInitialize() {
         config = VoxyServerConfig.load();
@@ -47,7 +85,15 @@ public class Voxyserver implements ModInitializer {
         VoxyServerNetworking.register();
         VoxyUpdateChecker.checkForUpdates();
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-                VoxyServerCommands.register(dispatcher, () -> importCoordinator));
+                VoxyServerCommands.register(dispatcher, this));
+
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            VoxyUpdateChecker.Notice notice = VoxyUpdateChecker.getPendingNotice();
+            if (notice == null) return;
+            ServerPlayer player = handler.getPlayer();
+            if (!player.createCommandSourceStack().permissions().hasPermission(Permissions.COMMANDS_ADMIN)) return;
+            player.sendSystemMessage(VoxyUpdateChecker.buildNoticeComponent(notice));
+        });
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             if (!server.isDedicatedServer()) {
                 LOGGER.info("VoxyServer disabled in singleplayer.");
@@ -67,10 +113,8 @@ public class Voxyserver implements ModInitializer {
                 DirtyTracker.INSTANCE = dirtyTracker;
                 ServerTickEvents.END_SERVER_TICK.register(dirtyTracker::tick);
             }
-            if (config.debugTrackingEnabled) {
-                com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE = new com.dripps.voxyserver.util.ServerStatsTracker(config.debugTrackingInterval);
-                ServerTickEvents.END_SERVER_TICK.register(com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE::tick);
-            }
+            com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE = new com.dripps.voxyserver.util.ServerStatsTracker(config.debugTrackingInterval);
+            ServerTickEvents.END_SERVER_TICK.register(com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE::tick);
             try {
                 lastConfigModified = Files.getLastModifiedTime(VoxyServerConfig.getConfigPath()).toMillis();
             } catch (IOException ignored) {}
@@ -82,6 +126,19 @@ public class Voxyserver implements ModInitializer {
                 checkConfigReload();
             });
 
+            ServerTickEvents.END_SERVER_TICK.register(s -> {
+                if (statsSubscribers.isEmpty() || streamingService == null) return;
+                if (++statsBroadcastCounter < STATS_BROADCAST_INTERVAL) return;
+                statsBroadcastCounter = 0;
+                Component stats = VoxyServerCommands.buildStats(s, this);
+                statsSubscribers.removeIf(uuid -> {
+                    ServerPlayer player = s.getPlayerList().getPlayer(uuid);
+                    if (player == null) return true;
+                    player.sendSystemMessage(stats);
+                    return false;
+                });
+            });
+
             LOGGER.info("VoxyServer engine started for world: {}", worldPath);
         });
 
@@ -90,6 +147,8 @@ public class Voxyserver implements ModInitializer {
                 LOGGER.info("shutting down VoxyServer engine");
                 DirtyTracker.INSTANCE = null;
                 dirtyTracker = null;
+                com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE = null;
+                statsSubscribers.clear();
                 if (importCoordinator != null) importCoordinator.shutdown();
                 if (streamingService != null) streamingService.shutdown();
                 lodEngine.shutdown();
@@ -125,13 +184,16 @@ public class Voxyserver implements ModInitializer {
         } catch (IOException ignored) {}
     }
 
-    private void applyConfigChanges(VoxyServerConfig oldCfg, VoxyServerConfig newCfg) {
-        if (oldCfg.generateOnChunkLoad != newCfg.generateOnChunkLoad)
+    private List<String> applyConfigChanges(VoxyServerConfig oldCfg, VoxyServerConfig newCfg) {
+        List<String> restartNotes = new ArrayList<>();
+        if (oldCfg.generateOnChunkLoad != newCfg.generateOnChunkLoad) {
             LOGGER.info("generateonchunkload changed, requires server restart to take effect");
-        if (oldCfg.dirtyTrackingEnabled != newCfg.dirtyTrackingEnabled)
+            restartNotes.add("generateOnChunkLoad requires a server restart to take effect");
+        }
+        if (oldCfg.dirtyTrackingEnabled != newCfg.dirtyTrackingEnabled) {
             LOGGER.info("dirtytrackingenabled changed, requires server restart to take effect");
-        if (oldCfg.debugTrackingEnabled != newCfg.debugTrackingEnabled)
-            LOGGER.info("debugtrackingenabled changed, requires server restart to take effect");
+            restartNotes.add("dirtyTrackingEnabled requires a server restart to take effect");
+        }
 
         if (streamingService != null) {
             streamingService.updateConfig(
@@ -139,7 +201,8 @@ public class Voxyserver implements ModInitializer {
                     newCfg.maxSectionsPerTickPerPlayer,
                     newCfg.sectionsPerPacket,
                     newCfg.tickInterval,
-                    newCfg.dirtyTrackingInterval
+                    newCfg.dirtyTrackingInterval,
+                    newCfg.hashSyncEnabled
             );
         }
 
@@ -154,5 +217,7 @@ public class Voxyserver implements ModInitializer {
         if (com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE != null) {
             com.dripps.voxyserver.util.ServerStatsTracker.INSTANCE.updateTickInterval(newCfg.debugTrackingInterval);
         }
+
+        return restartNotes;
     }
 }

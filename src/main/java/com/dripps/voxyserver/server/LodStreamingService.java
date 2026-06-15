@@ -600,6 +600,7 @@ public class LodStreamingService {
         }
 
         long compositeKey = composeSectionKey(dimOrdinals.getOrdinal(dimension), sectionKey);
+        hashCacheByKey.remove(compositeKey);
         if (!pendingDirtySections.containsKey(compositeKey)) {
             return;
         }

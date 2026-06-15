@@ -13,6 +13,7 @@ import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.ChatFormatting;
@@ -24,6 +25,8 @@ import net.minecraft.network.chat.Component;
 public class ClientLodReceiver {
 
     public static void register() {
+        ClientTickEvents.END_CLIENT_TICK.register(client -> ClientLodSettings.onClientTick());
+
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             ClientLodSettings.prepareForCurrentConnection();
             ClientPlayNetworking.send(new LODReadyPayload());

@@ -23,6 +23,11 @@ public class ClientLodSettings {
     private static int serverMaxSections = -1;
     private static volatile boolean protocolOk = false;
 
+    private static int lastManifestCenterSecX;
+    private static int lastManifestCenterSecZ;
+    private static Identifier lastManifestDim;
+    private static boolean manifestSent = false;
+
     private static String activeServerKey;
     private static ClientLodConfig.Preferences activePreferences = CONFIG.getPreferencesForServer(null);
 
@@ -30,6 +35,8 @@ public class ClientLodSettings {
         serverMaxRadius = -1;
         serverMaxSections = -1;
         protocolOk = false;
+        lastManifestDim = null;
+        manifestSent = false;
         activeServerKey = resolveCurrentServerKey();
         activePreferences = CONFIG.getPreferencesForServer(activeServerKey);
     }
@@ -49,6 +56,36 @@ public class ClientLodSettings {
         serverMaxSections = maxSections;
         sendPreferences();
         if (protocolOk) {
+            buildAndSendManifest();
+        }
+    }
+
+    public static void onClientTick() {
+        if (!protocolOk || !isEnabled() || serverMaxRadius < 0) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() == null) return;
+        ClientLevel level = mc.level;
+        var player = mc.player;
+        if (level == null || player == null) return;
+
+        Identifier dim = level.dimension().identifier();
+        int playerSecX = (player.getBlockX() >> 4) >> 1;
+        int playerSecZ = (player.getBlockZ() >> 4) >> 1;
+
+        boolean needRebuild;
+        if (!manifestSent) {
+            needRebuild = false;
+        } else if (lastManifestDim == null || !lastManifestDim.equals(dim)) {
+            needRebuild = true;
+        } else {
+            int radiusSections = Math.max(0, effectiveRadius()) >> 1;
+            int threshold = Math.max(4, radiusSections >> 1);
+            needRebuild = Math.abs(playerSecX - lastManifestCenterSecX) >= threshold
+                    || Math.abs(playerSecZ - lastManifestCenterSecZ) >= threshold;
+        }
+
+        if (needRebuild) {
             buildAndSendManifest();
         }
     }
@@ -97,6 +134,12 @@ public class ClientLodSettings {
         int radiusSections = Math.max(0, effectiveRadius()) >> 1;
         int playerSecX = (player.getBlockX() >> 4) >> 1;
         int playerSecZ = (player.getBlockZ() >> 4) >> 1;
+
+        lastManifestCenterSecX = playerSecX;
+        lastManifestCenterSecZ = playerSecZ;
+        lastManifestDim = dim;
+        manifestSent = true;
+
         Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(worldId.getWorldId());
 
         LongArrayList keys = new LongArrayList();
@@ -137,6 +180,8 @@ public class ClientLodSettings {
         serverMaxRadius = -1;
         serverMaxSections = -1;
         protocolOk = false;
+        lastManifestDim = null;
+        manifestSent = false;
         activeServerKey = null;
         activePreferences = CONFIG.getPreferencesForServer(null);
     }

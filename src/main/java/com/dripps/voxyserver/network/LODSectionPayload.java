@@ -5,7 +5,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
-// single level 0 lod section sent from server to client
+// single level 0 LOD section sent from server to client
 // contains: dimension id, section position key, a LUT of vanilla registry ids, and an index array
 // contentHash is the canonical content fingerprint the client persists for hash sync
 public record LODSectionPayload(

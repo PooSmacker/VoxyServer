@@ -7,7 +7,6 @@ import com.dripps.voxyserver.network.LODHandshakePayload;
 import com.dripps.voxyserver.network.LODManifestPayload;
 import com.dripps.voxyserver.network.LODPreferencesPayload;
 import com.dripps.voxyserver.network.LODProtocolPayload;
-import com.dripps.voxyserver.network.LODReadyPayload;
 import com.dripps.voxyserver.network.LODSectionPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
@@ -152,29 +151,17 @@ public class LodStreamingService {
             trackers.remove(handler.getPlayer().getUUID());
         });
 
-        ServerPlayNetworking.registerGlobalReceiver(LODReadyPayload.TYPE, (payload, context) -> {
-            var tracker = trackers.get(context.player().getUUID());
-            if (tracker == null) return;
-            ServerPlayer player = context.player();
-            tracker.setReady(true);
-            tracker.setProtocolOk(false);
-            if (!ServerPlayNetworking.canSend(player, LODProtocolPayload.TYPE)) {
-                Voxyserver.LOGGER.warn("player {} has an outdated VoxyServer client (no protocol handshake), LOD streaming disabled", player.getName().getString());
-                player.sendSystemMessage(clientOutOfDateMessage());
-                return;
-            }
-            ServerPlayNetworking.send(player, new LODProtocolPayload(VoxyServerNetworking.PROTOCOL_VERSION));
-            ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
-        });
-
         ServerPlayNetworking.registerGlobalReceiver(LODHandshakePayload.TYPE, (payload, context) -> {
             var tracker = trackers.get(context.player().getUUID());
             if (tracker == null) return;
             ServerPlayer player = context.player();
             int clientProto = payload.protocol();
             int serverProto = VoxyServerNetworking.PROTOCOL_VERSION;
+            tracker.setReady(true);
             if (clientProto == serverProto) {
                 tracker.setProtocolOk(true);
+                ServerPlayNetworking.send(player, new LODProtocolPayload(serverProto));
+                ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
                 if (hashSyncEnabled) {
                     Identifier dim = player.level().dimension().identifier();
                     tracker.beginManifestWait(dim, currentTick + MANIFEST_TIMEOUT_TICKS);

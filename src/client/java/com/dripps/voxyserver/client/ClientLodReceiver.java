@@ -5,7 +5,6 @@ import com.dripps.voxyserver.client.service.RemoteIngestService;
 import com.dripps.voxyserver.network.LODClearPayload;
 import com.dripps.voxyserver.network.LODHandshakePayload;
 import com.dripps.voxyserver.network.LODProtocolPayload;
-import com.dripps.voxyserver.network.LODReadyPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import com.dripps.voxyserver.network.VoxyServerNetworking;
@@ -29,14 +28,8 @@ public class ClientLodReceiver {
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             ClientLodSettings.prepareForCurrentConnection();
-            ClientPlayNetworking.send(new LODReadyPayload());
             if (ClientPlayNetworking.canSend(LODHandshakePayload.TYPE)) {
                 ClientPlayNetworking.send(new LODHandshakePayload(VoxyServerNetworking.PROTOCOL_VERSION));
-            } else {
-                client.execute(() -> {
-                    ClientLodSettings.setProtocolOk(false);
-                    tellPlayer(serverOutOfDateMessage());
-                });
             }
         });
 

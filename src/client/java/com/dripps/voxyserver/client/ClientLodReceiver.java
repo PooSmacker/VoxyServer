@@ -8,7 +8,6 @@ import com.dripps.voxyserver.network.LODProtocolPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import com.dripps.voxyserver.network.VoxyServerNetworking;
-import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
@@ -77,13 +76,9 @@ public class ClientLodReceiver {
                 WorldIdentifier worldId = WorldIdentifier.of(level);
                 if (worldId == null) return;
 
-                WorldEngine engine = instance.getOrCreate(worldId);
-                if (engine == null || !engine.isLive()) return;
-
                 RegistryAccess registryAccess = level.registryAccess();
 
-                // decodeBulk happens on the ingest worker thread
-                ingestService.enqueueIngest(engine, payload, registryAccess, worldId.getWorldId());
+                ingestService.enqueueIngest(worldId, payload, registryAccess);
             });
         });
 

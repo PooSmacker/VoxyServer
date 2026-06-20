@@ -1,11 +1,14 @@
 package com.dripps.voxyserver.client;
 
+import com.dripps.voxyserver.client.service.IVoxyServerIngestAccess;
+import com.dripps.voxyserver.client.service.RemoteIngestService;
 import com.dripps.voxyserver.network.LODManifestPayload;
 import com.dripps.voxyserver.network.LODPreferencesPayload;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
@@ -15,6 +18,8 @@ import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.resources.Identifier;
 
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class ClientLodSettings {
     private static final ClientLodConfig CONFIG = ClientLodConfig.load();
@@ -31,12 +36,21 @@ public class ClientLodSettings {
     private static String activeServerKey;
     private static ClientLodConfig.Preferences activePreferences = CONFIG.getPreferencesForServer(null);
 
+    private static final long[] EMPTY_LONG = new long[0];
+    private static final AtomicReference<ManifestRequest> pendingManifestRequest = new AtomicReference<>();
+    private static final AtomicBoolean manifestBuildScheduled = new AtomicBoolean(false);
+
+    private record ManifestRequest(WorldIdentifier worldId, Identifier dim,
+                                   int playerSecX, int playerSecZ, int radiusSections) {}
+
     public static void prepareForCurrentConnection() {
         serverMaxRadius = -1;
         serverMaxSections = -1;
         protocolOk = false;
         lastManifestDim = null;
         manifestSent = false;
+        pendingManifestRequest.set(null);
+        manifestBuildScheduled.set(false);
         activeServerKey = resolveCurrentServerKey();
         activePreferences = CONFIG.getPreferencesForServer(activeServerKey);
     }
@@ -56,7 +70,7 @@ public class ClientLodSettings {
         serverMaxSections = maxSections;
         sendPreferences();
         if (protocolOk) {
-            buildAndSendManifest();
+            requestManifestBuild();
         }
     }
 
@@ -86,7 +100,7 @@ public class ClientLodSettings {
         }
 
         if (needRebuild) {
-            buildAndSendManifest();
+            requestManifestBuild();
         }
     }
 
@@ -97,9 +111,8 @@ public class ClientLodSettings {
     }
 
     // tells the server which sections we already store so it can skip resending them
-    // built from voxy persisted storage intersected with our hash sidecar within radius
-    // never throws into the network thread, any failure just omits the manifest so the server full sends
-    private static void buildAndSendManifest() {
+    // captures player state on the client thread then hands the heavy build to the ingest worker
+    private static void requestManifestBuild() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.getConnection() == null) return;
         ClientLevel level = mc.level;
@@ -110,27 +123,6 @@ public class ClientLodSettings {
         if (worldId == null) return;
         Identifier dim = level.dimension().identifier();
 
-        try {
-            buildAndSendManifest(mc, level, player, worldId, dim);
-        } catch (Exception e) {
-            me.cortex.voxy.common.Logger.error("voxyserver manifest build failed, server will full send", e);
-            sendManifestChunk(dim, new long[0], new long[0], true);
-        }
-    }
-
-    private static void buildAndSendManifest(Minecraft mc, ClientLevel level,
-                                             net.minecraft.client.player.LocalPlayer player,
-                                             WorldIdentifier worldId, Identifier dim) {
-        if (VoxyCommon.getInstance() == null) {
-            sendManifestChunk(dim, new long[0], new long[0], true);
-            return;
-        }
-        WorldEngine engine = worldId.getOrCreateEngine();
-        if (engine == null || !engine.isLive()) {
-            sendManifestChunk(dim, new long[0], new long[0], true);
-            return;
-        }
-
         int radiusSections = Math.max(0, effectiveRadius()) >> 1;
         int playerSecX = (player.getBlockX() >> 4) >> 1;
         int playerSecZ = (player.getBlockZ() >> 4) >> 1;
@@ -140,25 +132,84 @@ public class ClientLodSettings {
         lastManifestDim = dim;
         manifestSent = true;
 
-        Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(worldId.getWorldId());
+        pendingManifestRequest.set(new ManifestRequest(worldId, dim, playerSecX, playerSecZ, radiusSections));
+        scheduleManifestBuild();
+    }
 
-        LongArrayList keys = new LongArrayList();
-        LongArrayList hashes = new LongArrayList();
-        engine.storage.iteratePositions(0, key -> {
-            int sx = WorldEngine.getX(key);
-            int sz = WorldEngine.getZ(key);
-            if (Math.abs(sx - playerSecX) > radiusSections || Math.abs(sz - playerSecZ) > radiusSections) return;
-            if (!stored.containsKey(key)) return;
-            keys.add(key);
-            hashes.add(stored.get(key));
-        });
-
-        int total = keys.size();
-        if (total == 0) {
-            sendManifestChunk(dim, new long[0], new long[0], true);
+    private static void scheduleManifestBuild() {
+        if (!manifestBuildScheduled.compareAndSet(false, true)) return;
+        RemoteIngestService service = getIngestService();
+        if (service == null || !service.isLive()) {
+            manifestBuildScheduled.set(false);
             return;
         }
-        for (int i = 0; i < total; i += MANIFEST_CHUNK) {
+        service.enqueueManifestBuild(ClientLodSettings::runManifestBuildJob);
+    }
+
+    private static void runManifestBuildJob() {
+        try {
+            ManifestRequest request = pendingManifestRequest.getAndSet(null);
+            if (request != null) {
+                buildManifest(request);
+            }
+        } finally {
+            manifestBuildScheduled.set(false);
+            if (pendingManifestRequest.get() != null) {
+                scheduleManifestBuild();
+            }
+        }
+    }
+
+    private static RemoteIngestService getIngestService() {
+        VoxyInstance instance = VoxyCommon.getInstance();
+        if (instance == null) return null;
+        return ((IVoxyServerIngestAccess) instance).voxyserver$getRemoteIngestService();
+    }
+
+    private static void buildManifest(ManifestRequest request) {
+        Identifier dim = request.dim();
+        try {
+            if (VoxyCommon.getInstance() == null) {
+                dispatchManifest(dim, null, null);
+                return;
+            }
+
+            Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(request.worldId().getWorldId());
+
+            int playerSecX = request.playerSecX();
+            int playerSecZ = request.playerSecZ();
+            int radiusSections = request.radiusSections();
+
+            LongArrayList keys = new LongArrayList();
+            LongArrayList hashes = new LongArrayList();
+            for (var entry : stored.long2LongEntrySet()) {
+                long key = entry.getLongKey();
+                if (WorldEngine.getLevel(key) != 0) continue;
+                int sx = WorldEngine.getX(key);
+                int sz = WorldEngine.getZ(key);
+                if (Math.abs(sx - playerSecX) > radiusSections || Math.abs(sz - playerSecZ) > radiusSections) continue;
+                keys.add(key);
+                hashes.add(entry.getLongValue());
+            }
+
+            dispatchManifest(dim, keys, hashes);
+        } catch (Exception e) {
+            me.cortex.voxy.common.Logger.error("voxyserver manifest build failed, server will full send", e);
+            dispatchManifest(dim, null, null);
+        }
+    }
+
+    private static void dispatchManifest(Identifier dim, LongArrayList keys, LongArrayList hashes) {
+        int total = (keys == null) ? 0 : keys.size();
+        if (total == 0) {
+            Minecraft.getInstance().execute(() -> sendManifestChunk(dim, EMPTY_LONG, EMPTY_LONG, true));
+            return;
+        }
+
+        int chunkCount = (total + MANIFEST_CHUNK - 1) / MANIFEST_CHUNK;
+        long[][] keyChunks = new long[chunkCount][];
+        long[][] hashChunks = new long[chunkCount][];
+        for (int c = 0, i = 0; i < total; c++, i += MANIFEST_CHUNK) {
             int end = Math.min(total, i + MANIFEST_CHUNK);
             int n = end - i;
             long[] k = new long[n];
@@ -167,8 +218,16 @@ public class ClientLodSettings {
                 k[j] = keys.getLong(i + j);
                 h[j] = hashes.getLong(i + j);
             }
-            sendManifestChunk(dim, k, h, end >= total);
+            keyChunks[c] = k;
+            hashChunks[c] = h;
         }
+
+        Minecraft.getInstance().execute(() -> {
+            if (Minecraft.getInstance().getConnection() == null) return;
+            for (int c = 0; c < keyChunks.length; c++) {
+                sendManifestChunk(dim, keyChunks[c], hashChunks[c], c == keyChunks.length - 1);
+            }
+        });
     }
 
     private static void sendManifestChunk(Identifier dimension, long[] keys, long[] hashes, boolean complete) {
@@ -182,6 +241,8 @@ public class ClientLodSettings {
         protocolOk = false;
         lastManifestDim = null;
         manifestSent = false;
+        pendingManifestRequest.set(null);
+        manifestBuildScheduled.set(false);
         activeServerKey = null;
         activePreferences = CONFIG.getPreferencesForServer(null);
     }

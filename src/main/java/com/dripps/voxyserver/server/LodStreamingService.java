@@ -191,6 +191,8 @@ public class LodStreamingService {
             }
             if (payload.complete()) {
                 tracker.clearManifestWait();
+            } else {
+                tracker.extendManifestWait(payload.dimension(), currentTick + MANIFEST_TIMEOUT_TICKS);
             }
         });
 

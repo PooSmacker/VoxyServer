@@ -85,6 +85,12 @@ public class PlayerLodTracker {
         this.awaitingManifestDim = null;
     }
 
+    public synchronized void extendManifestWait(Identifier dimension, long deadlineTick) {
+        if (awaitingManifestDim == null) return;
+        if (!awaitingManifestDim.equals(dimension)) return;
+        this.manifestDeadlineTick = deadlineTick;
+    }
+
     // true if the scan should be gated waiting for this dims manifest. opens the gate once the deadline passes
     public synchronized boolean isManifestGated(Identifier dimension, long currentTick) {
         if (awaitingManifestDim == null) return false;

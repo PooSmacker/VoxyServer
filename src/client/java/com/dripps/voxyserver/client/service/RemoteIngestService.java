@@ -11,6 +11,7 @@ import me.cortex.voxy.common.voxelization.WorldVoxilizedSectionMipper;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldUpdater;
 import me.cortex.voxy.common.world.other.Mapper;
+import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -24,10 +25,11 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class RemoteIngestService {
 
-    private record IngestTask(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {}
+    private record IngestTask(WorldIdentifier worldId, PreSerializedLodPayload raw, RegistryAccess registryAccess) {}
 
     private final Service service;
     private final ConcurrentLinkedDeque<IngestTask> ingestQueue = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<Runnable> manifestQueue = new ConcurrentLinkedDeque<>();
 
     public RemoteIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(
@@ -38,13 +40,21 @@ public class RemoteIngestService {
     }
 
     private void processJob() {
+        Runnable manifestJob = this.manifestQueue.poll();
+        if (manifestJob != null) {
+            manifestJob.run();
+            return;
+        }
+
         IngestTask task = this.ingestQueue.poll();
         if (task == null) return;
 
-        if (!task.engine().isLive()) return;
-        task.engine().markActive();
+        WorldEngine engine = task.worldId().getOrCreateEngine();
+        if (engine == null || !engine.isLive()) return;
+        engine.markActive();
 
-        Mapper mapper = task.engine().getMapper();
+        String worldIdHash = task.worldId().getWorldId();
+        Mapper mapper = engine.getMapper();
 
         for (LODSectionPayload section : task.raw().decodeBulk(task.registryAccess()).sections()) {
             long[] remappedLut = remapLut(
@@ -81,11 +91,11 @@ public class RemoteIngestService {
                         vs.lvl0NonAirCount = nonAirCount;
 
                         WorldVoxilizedSectionMipper.mipSection(vs, mapper);
-                        WorldUpdater.insertUpdate(task.engine(), vs);
+                        WorldUpdater.insertUpdate(engine, vs);
                     }
                 }
             }
-            ClientLodHashStore.get().put(task.worldId(), section.sectionKey(), section.contentHash());
+            ClientLodHashStore.get().put(worldIdHash, section.sectionKey(), section.contentHash());
         }
     }
 
@@ -107,20 +117,27 @@ public class RemoteIngestService {
         return remapped;
     }
 
-    public void enqueueIngest(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {
+    public void enqueueIngest(WorldIdentifier worldId, PreSerializedLodPayload raw, RegistryAccess registryAccess) {
         if (!this.service.isLive()) return;
 
-        if (!engine.isLive()) {
-            Logger.error("tried enqueuing remote ingest into a WorldEngine that is not alive, skipping");
-            return;
-        }
-
-        this.ingestQueue.add(new IngestTask(engine, raw, registryAccess, worldId));
+        this.ingestQueue.add(new IngestTask(worldId, raw, registryAccess));
 
         try {
             this.service.execute();
         } catch (Exception e) {
             Logger.error("exception enqueuing remote ingest task", e);
+        }
+    }
+
+    public void enqueueManifestBuild(Runnable job) {
+        if (!this.service.isLive()) return;
+
+        this.manifestQueue.add(job);
+
+        try {
+            this.service.execute();
+        } catch (Exception e) {
+            Logger.error("exception enqueuing manifest build task", e);
         }
     }
 

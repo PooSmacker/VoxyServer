@@ -14,7 +14,34 @@ public class VoxyConfigScreen {
                 .setTitle(Component.literal("VoxyServer Client Settings"));
 
         ConfigEntryBuilder entryBuilder = builder.entryBuilder();
+
+        // Display settings are global (saved to the client config) and always editable,
+        // even when not connected to a server.
+        ConfigCategory display = builder.getOrCreateCategory(Component.literal("Display"));
+        display.addEntry(entryBuilder.startBooleanToggle(
+                        Component.literal("Show Download HUD"),
+                        ClientLodSettings.isDownloadHudEnabled())
+                .setDefaultValue(true)
+                .setTooltip(Component.literal("show the world-data download overlay at the top of the screen while LODs stream in"))
+                .setSaveConsumer(ClientLodSettings::setDownloadHudEnabled)
+                .build());
+        display.addEntry(entryBuilder.startBooleanToggle(
+                        Component.literal("Download HUD in Top-Left Corner"),
+                        ClientLodSettings.isDownloadHudTopLeft())
+                .setDefaultValue(false)
+                .setTooltip(Component.literal("place the download overlay in the top-left corner instead of centered"))
+                .setSaveConsumer(ClientLodSettings::setDownloadHudTopLeft)
+                .build());
+
         ConfigCategory category = builder.getOrCreateCategory(Component.literal("LOD Streaming"));
+
+        // set before the early return so it applies whether or not we are connected
+        builder.setSavingRunnable(() -> {
+            ClientLodSettings.saveClientConfig();
+            if (ClientLodSettings.hasActiveServerProfile()) {
+                ClientLodSettings.saveAndSendPreferences();
+            }
+        });
 
         if (!ClientLodSettings.hasActiveServerProfile()) {
             category.addEntry(entryBuilder.startTextDescription(
@@ -28,8 +55,6 @@ public class VoxyConfigScreen {
 
         if (maxRadius <= 0) maxRadius = 256;
         if (maxSections <= 0) maxSections = 50;
-
-        builder.setSavingRunnable(ClientLodSettings::saveAndSendPreferences);
 
         category.addEntry(entryBuilder.startBooleanToggle(
                         Component.literal("Enable LOD Streaming"),

@@ -35,6 +35,12 @@ public class PlayerLodTracker {
     private boolean scanExhausted;
     private long nextFullRescanTick;
 
+    // download progress session state (one session per fresh scan)
+    private boolean scanFreshlyStarted;
+    private int streamTotal;
+    private int streamSent;
+    private boolean completeReported;
+
     public PlayerLodTracker() {
         this.sentSectionHashes.defaultReturnValue(0L);
     }
@@ -113,6 +119,48 @@ public class PlayerLodTracker {
         return sentSectionHashes.size();
     }
 
+    // true if the composite key is in the clients manifest / already sent set (any hash)
+    public synchronized boolean hasSentKey(long compositeKey) {
+        return sentSectionHashes.containsKey(compositeKey);
+    }
+
+    public synchronized boolean isScanExhausted() {
+        return scanExhausted;
+    }
+
+    // returns true exactly once after a fresh scan session begins, so the caller can (re)compute the total
+    public synchronized boolean consumeScanFreshlyStarted() {
+        boolean v = scanFreshlyStarted;
+        scanFreshlyStarted = false;
+        return v;
+    }
+
+    public synchronized void beginProgressSession(int total) {
+        this.streamTotal = total;
+        this.streamSent = 0;
+        this.completeReported = false;
+    }
+
+    public synchronized void addStreamSent(int n) {
+        this.streamSent += n;
+    }
+
+    public synchronized int getStreamSent() {
+        return streamSent;
+    }
+
+    public synchronized int getStreamTotal() {
+        return streamTotal;
+    }
+
+    public synchronized boolean isCompleteReported() {
+        return completeReported;
+    }
+
+    public synchronized void setCompleteReported(boolean v) {
+        this.completeReported = v;
+    }
+
     public synchronized boolean prepareScan(int centerSecX, int centerSecZ,
                                             int radiusSections,
                                             int minSectionY,
@@ -143,6 +191,7 @@ public class PlayerLodTracker {
         if (geometryChanged || centerChanged) {
             resetScanCursorLocked();
             scanExhausted = false;
+            scanFreshlyStarted = true;
         }
 
         if (scanExhausted) {
@@ -151,6 +200,7 @@ public class PlayerLodTracker {
             }
             resetScanCursorLocked();
             scanExhausted = false;
+            scanFreshlyStarted = true;
         }
 
         if (!scanCursorInitialized) {
@@ -219,6 +269,9 @@ public class PlayerLodTracker {
         scanGeometryInitialized = false;
         scanExhausted = false;
         nextFullRescanTick = 0L;
+        scanFreshlyStarted = false;
+        streamSent = 0;
+        completeReported = false;
         resetScanCursorLocked();
     }
 

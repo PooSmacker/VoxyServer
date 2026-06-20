@@ -11,6 +11,8 @@ import me.cortex.voxy.common.voxelization.WorldVoxilizedSectionMipper;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldUpdater;
 import me.cortex.voxy.common.world.other.Mapper;
+import me.cortex.voxy.commonImpl.VoxyInstance;
+import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -24,10 +26,18 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class RemoteIngestService {
 
-    private record IngestTask(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {}
+    // hold the instance + worldId, NOT a pre-resolved engine. resolving the engine
+    // (VoxyInstance.getOrCreate) opens the RocksDB store and loads its index on first
+    // use, which is expensive - so we do it on THIS worker thread, never the render thread.
+    private record IngestTask(VoxyInstance instance, WorldIdentifier worldId,
+                              PreSerializedLodPayload raw, RegistryAccess registryAccess) {}
 
     private final Service service;
     private final ConcurrentLinkedDeque<IngestTask> ingestQueue = new ConcurrentLinkedDeque<>();
+
+    // worker-thread engine cache so getOrCreate's first-time open cost is paid once, off-thread
+    private volatile WorldEngine cachedEngine;
+    private volatile String cachedWorldId;
 
     public RemoteIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(
@@ -37,14 +47,32 @@ public class RemoteIngestService {
         );
     }
 
+    // resolves (and caches) the WorldEngine on the worker thread. the first call for a
+    // world opens the RocksDB backend + loads the on-disk index - that work happens here,
+    // off the render thread, so the client stays responsive during the join LOD burst.
+    private WorldEngine resolveEngine(VoxyInstance instance, WorldIdentifier worldId) {
+        WorldEngine e = this.cachedEngine;
+        if (e != null && e.isLive() && worldId.getWorldId().equals(this.cachedWorldId)) {
+            return e;
+        }
+        e = instance.getOrCreate(worldId);
+        if (e != null) {
+            this.cachedEngine = e;
+            this.cachedWorldId = worldId.getWorldId();
+        }
+        return e;
+    }
+
     private void processJob() {
         IngestTask task = this.ingestQueue.poll();
         if (task == null) return;
 
-        if (!task.engine().isLive()) return;
-        task.engine().markActive();
+        WorldEngine engine = resolveEngine(task.instance(), task.worldId());
+        if (engine == null || !engine.isLive()) return;
+        engine.markActive();
 
-        Mapper mapper = task.engine().getMapper();
+        String worldId = task.worldId().getWorldId();
+        Mapper mapper = engine.getMapper();
 
         for (LODSectionPayload section : task.raw().decodeBulk(task.registryAccess()).sections()) {
             long[] remappedLut = remapLut(
@@ -81,11 +109,11 @@ public class RemoteIngestService {
                         vs.lvl0NonAirCount = nonAirCount;
 
                         WorldVoxilizedSectionMipper.mipSection(vs, mapper);
-                        WorldUpdater.insertUpdate(task.engine(), vs);
+                        WorldUpdater.insertUpdate(engine, vs);
                     }
                 }
             }
-            ClientLodHashStore.get().put(task.worldId(), section.sectionKey(), section.contentHash());
+            ClientLodHashStore.get().put(worldId, section.sectionKey(), section.contentHash());
         }
     }
 
@@ -107,15 +135,14 @@ public class RemoteIngestService {
         return remapped;
     }
 
-    public void enqueueIngest(WorldEngine engine, PreSerializedLodPayload raw, RegistryAccess registryAccess, String worldId) {
+    // engine is resolved lazily on the worker thread; callers pass the instance + worldId
+    // (both cheap to obtain on the render thread) instead of a pre-opened WorldEngine.
+    public void enqueueIngest(VoxyInstance instance, WorldIdentifier worldId,
+                              PreSerializedLodPayload raw, RegistryAccess registryAccess) {
         if (!this.service.isLive()) return;
+        if (instance == null || worldId == null) return;
 
-        if (!engine.isLive()) {
-            Logger.error("tried enqueuing remote ingest into a WorldEngine that is not alive, skipping");
-            return;
-        }
-
-        this.ingestQueue.add(new IngestTask(engine, raw, registryAccess, worldId));
+        this.ingestQueue.add(new IngestTask(instance, worldId, raw, registryAccess));
 
         try {
             this.service.execute();

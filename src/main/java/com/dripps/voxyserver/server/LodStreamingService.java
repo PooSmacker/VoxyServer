@@ -11,6 +11,7 @@ import com.dripps.voxyserver.network.LODSectionPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import com.dripps.voxyserver.network.VoxyServerNetworking;
+import com.dripps.voxyserver.network.LODProgressPayload;
 import com.dripps.voxyserver.util.IdRemapper;
 import it.unimi.dsi.fastutil.longs.Long2ShortOpenHashMap;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -44,8 +45,13 @@ public class LodStreamingService {
     private static final long INITIAL_LOAD_GRACE_TICKS = 20L;
     private static final int INITIAL_LOAD_MIN_CHUNKS_AT_DEADLINE = 3;
     private static final int MAX_DIRTY_SECTIONS_PER_DRAIN = 64;
-    // we have a grace window for the client manifest to arrive before the scan falls back to a full send
-    private static final long MANIFEST_TIMEOUT_TICKS = 60L;
+    // Grace window for the client manifest to arrive before the scan falls back to a full send.
+    // The gate clears immediately when the manifest's final chunk arrives (clearManifestWait),
+    // so for responsive clients streaming starts right after their manifest lands; this timeout
+    // is only the fallback cap for clients that never send one. It must be long enough to cover
+    // a client building its manifest from a large local LOD store, otherwise the server full-sends
+    // and the client re-downloads sections it already has.
+    private static final long MANIFEST_TIMEOUT_TICKS = 600L;
 
     private final ServerLodEngine engine;
     private volatile int lodStreamRadius;
@@ -409,6 +415,11 @@ public class LodStreamingService {
             return;
         }
 
+        if (tracker.consumeScanFreshlyStarted()) {
+            int needed = countNeededSections(world, playerWorldSecX, playerWorldSecZ, radiusSections, tracker, dimOrd);
+            tracker.beginProgressSession(needed);
+        }
+
         List<LODSectionPayload> batch = new ArrayList<>();
         int sent = 0;
 
@@ -482,6 +493,48 @@ public class LodStreamingService {
                 }
             });
         }
+
+        boolean nowExhausted = tracker.isScanExhausted();
+        if (sent > 0) {
+            tracker.addStreamSent(sent);
+        }
+        boolean reportComplete = nowExhausted && !tracker.isCompleteReported();
+        if (sent > 0 || reportComplete) {
+            if (reportComplete) tracker.setCompleteReported(true);
+            int pSent = tracker.getStreamSent();
+            int pTotal = tracker.getStreamTotal();
+            boolean pComplete = nowExhausted;
+            UUID progressPlayerId = snap.uuid;
+            Identifier progressDim = snap.dimension;
+            server.execute(() -> {
+                ServerPlayer player = server.getPlayerList().getPlayer(progressPlayerId);
+                if (player == null) return;
+                if (!player.level().dimension().identifier().equals(progressDim)) return;
+                if (!ServerPlayNetworking.canSend(player, LODProgressPayload.TYPE)) return;
+                ServerPlayNetworking.send(player, new LODProgressPayload(progressDim, pSent, pTotal, pComplete));
+            });
+        }
+    }
+
+    // counts level-0 sections the server has within the players radius that the client
+    // did not list in its manifest (how many we still need to send). runs once per fresh
+    // scan session on the stream worker thread.
+    private int countNeededSections(WorldEngine world, int centerSecX, int centerSecZ,
+                                    int radiusSections, PlayerLodTracker tracker, int dimOrd) {
+        final int[] count = {0};
+        try {
+            world.storage.iteratePositions(0, key -> {
+                int sx = WorldEngine.getX(key);
+                int sz = WorldEngine.getZ(key);
+                if (Math.abs(sx - centerSecX) > radiusSections || Math.abs(sz - centerSecZ) > radiusSections) return;
+                if (tracker.hasSentKey(composeSectionKey(dimOrd, key))) return;
+                count[0]++;
+            });
+        } catch (Exception e) {
+            Voxyserver.LOGGER.warn("voxyserver progress total count failed, using indeterminate", e);
+            return 0;
+        }
+        return count[0];
     }
 
     private LODSectionPayload serializeSection(WorldSection section, Identifier dimension,

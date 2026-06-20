@@ -4,11 +4,11 @@ import com.dripps.voxyserver.client.service.IVoxyServerIngestAccess;
 import com.dripps.voxyserver.client.service.RemoteIngestService;
 import com.dripps.voxyserver.network.LODClearPayload;
 import com.dripps.voxyserver.network.LODHandshakePayload;
+import com.dripps.voxyserver.network.LODProgressPayload;
 import com.dripps.voxyserver.network.LODProtocolPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import com.dripps.voxyserver.network.VoxyServerNetworking;
-import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
@@ -35,6 +35,7 @@ public class ClientLodReceiver {
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLodSettings.reset();
+            VoxyDownloadHud.reset();
             setRemoteIngest(false);
             ClientLodHashStore.get().flush();
         });
@@ -59,6 +60,11 @@ public class ClientLodReceiver {
                     payload.maxLodStreamRadius(), payload.maxSectionsPerTick()));
         });
 
+        ClientPlayNetworking.registerGlobalReceiver(LODProgressPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> VoxyDownloadHud.onProgress(
+                    payload.sent(), payload.total(), payload.complete()));
+        });
+
         ClientPlayNetworking.registerGlobalReceiver(PreSerializedLodPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 if (!ClientLodSettings.isProtocolOk()) return;
@@ -77,13 +83,12 @@ public class ClientLodReceiver {
                 WorldIdentifier worldId = WorldIdentifier.of(level);
                 if (worldId == null) return;
 
-                WorldEngine engine = instance.getOrCreate(worldId);
-                if (engine == null || !engine.isLive()) return;
-
                 RegistryAccess registryAccess = level.registryAccess();
 
-                // decodeBulk happens on the ingest worker thread
-                ingestService.enqueueIngest(engine, payload, registryAccess, worldId.getWorldId());
+                // Hand the instance + worldId to the ingest worker. The engine is resolved
+                // (and the RocksDB store opened/indexed) ON THE WORKER THREAD, not here on
+                // the render thread - that first-time open is what used to freeze the join.
+                ingestService.enqueueIngest(instance, worldId, payload, registryAccess);
             });
         });
 

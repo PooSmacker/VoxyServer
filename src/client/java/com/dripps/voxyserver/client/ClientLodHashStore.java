@@ -82,21 +82,31 @@ public class ClientLodHashStore {
     }
 
     private static Long2LongOpenHashMap load(String worldId) {
-        Long2LongOpenHashMap loaded = new Long2LongOpenHashMap();
-        loaded.defaultReturnValue(0L);
         Path file = fileFor(worldId);
-        if (!Files.exists(file)) return loaded;
+        if (!Files.exists(file)) {
+            return newSizedMap(16);
+        }
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
             int count = in.readInt();
+            // pre-size to the entry count: this sidecar can hold millions of sections, and a
+            // default-capacity map would rehash repeatedly while loading, taking long enough that
+            // the join manifest misses the server's wait window (causing a full resend).
+            Long2LongOpenHashMap loaded = newSizedMap(Math.max(16, count));
             for (int i = 0; i < count; i++) {
                 long key = in.readLong();
                 long hash = in.readLong();
                 loaded.put(key, hash);
             }
+            return loaded;
         } catch (IOException ex) {
             Logger.error("failed to load voxyserver hash sidecar, treating as empty", ex);
-            loaded.clear();
+            return newSizedMap(16);
         }
-        return loaded;
+    }
+
+    private static Long2LongOpenHashMap newSizedMap(int expected) {
+        Long2LongOpenHashMap m = new Long2LongOpenHashMap(expected, 0.75f);
+        m.defaultReturnValue(0L);
+        return m;
     }
 }

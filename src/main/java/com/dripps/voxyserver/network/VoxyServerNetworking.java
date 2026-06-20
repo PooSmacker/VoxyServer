@@ -13,6 +13,7 @@ public class VoxyServerNetworking {
         PayloadTypeRegistry.clientboundPlay().register(LODClearPayload.TYPE, LODClearPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(LODServerSettingsPayload.TYPE, LODServerSettingsPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(LODProtocolPayload.TYPE, LODProtocolPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(LODProgressPayload.TYPE, LODProgressPayload.CODEC);
 
         PayloadTypeRegistry.serverboundPlay().register(LODPreferencesPayload.TYPE, LODPreferencesPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(LODManifestPayload.TYPE, LODManifestPayload.CODEC);

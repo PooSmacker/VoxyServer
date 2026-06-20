@@ -18,6 +18,9 @@ public class ClientLodConfig {
 
     public Preferences defaults = new Preferences();
     public Map<String, Preferences> serverProfiles = new LinkedHashMap<>();
+    // global client display settings (Boolean so a config missing the field defaults via sanitize)
+    public Boolean showDownloadHud = Boolean.TRUE;
+    public Boolean hudTopLeft = Boolean.FALSE;
 
     public static ClientLodConfig load() {
         Path configPath = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
@@ -76,6 +79,12 @@ public class ClientLodConfig {
     }
 
     private void sanitize() {
+        if (showDownloadHud == null) {
+            showDownloadHud = Boolean.TRUE;
+        }
+        if (hudTopLeft == null) {
+            hudTopLeft = Boolean.FALSE;
+        }
         if (defaults == null) {
             defaults = new Preferences();
         } else {

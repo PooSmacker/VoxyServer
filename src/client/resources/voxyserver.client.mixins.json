@@ -4,6 +4,7 @@
   "package": "com.dripps.voxyserver.client.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "MixinGuiVoxyHud"
   ],
   "injectors": {
     "defaultRequire": 1

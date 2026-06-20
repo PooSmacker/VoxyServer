@@ -5,7 +5,6 @@ import com.dripps.voxyserver.network.LODPreferencesPayload;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import me.cortex.voxy.common.world.WorldEngine;
-import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
@@ -27,6 +26,7 @@ public class ClientLodSettings {
     private static int lastManifestCenterSecZ;
     private static Identifier lastManifestDim;
     private static boolean manifestSent = false;
+    private static volatile boolean manifestBuilding = false;
 
     private static String activeServerKey;
     private static ClientLodConfig.Preferences activePreferences = CONFIG.getPreferencesForServer(null);
@@ -37,6 +37,7 @@ public class ClientLodSettings {
         protocolOk = false;
         lastManifestDim = null;
         manifestSent = false;
+        manifestBuilding = false;
         activeServerKey = resolveCurrentServerKey();
         activePreferences = CONFIG.getPreferencesForServer(activeServerKey);
     }
@@ -96,62 +97,65 @@ public class ClientLodSettings {
         return (preferred <= 0) ? serverMaxRadius : Math.min(preferred, serverMaxRadius);
     }
 
-    // tells the server which sections we already store so it can skip resending them
-    // built from voxy persisted storage intersected with our hash sidecar within radius
-    // never throws into the network thread, any failure just omits the manifest so the server full sends
+    // tells the server which sections we already store so it can skip resending them.
+    // Cheap capture happens here on the render thread; the heavy hash-store load + copy +
+    // iteration is offloaded to a background thread so it never blocks rendering.
     private static void buildAndSendManifest() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.getConnection() == null) return;
         ClientLevel level = mc.level;
         var player = mc.player;
         if (level == null || player == null) return;
-
         WorldIdentifier worldId = WorldIdentifier.of(level);
         if (worldId == null) return;
         Identifier dim = level.dimension().identifier();
 
-        try {
-            buildAndSendManifest(mc, level, player, worldId, dim);
-        } catch (Exception e) {
-            me.cortex.voxy.common.Logger.error("voxyserver manifest build failed, server will full send", e);
-            sendManifestChunk(dim, new long[0], new long[0], true);
-        }
-    }
+        // a build is already running; onClientTick will retry later if the player keeps moving
+        if (manifestBuilding) return;
 
-    private static void buildAndSendManifest(Minecraft mc, ClientLevel level,
-                                             net.minecraft.client.player.LocalPlayer player,
-                                             WorldIdentifier worldId, Identifier dim) {
-        if (VoxyCommon.getInstance() == null) {
-            sendManifestChunk(dim, new long[0], new long[0], true);
-            return;
-        }
-        WorldEngine engine = worldId.getOrCreateEngine();
-        if (engine == null || !engine.isLive()) {
-            sendManifestChunk(dim, new long[0], new long[0], true);
-            return;
-        }
-
-        int radiusSections = Math.max(0, effectiveRadius()) >> 1;
-        int playerSecX = (player.getBlockX() >> 4) >> 1;
-        int playerSecZ = (player.getBlockZ() >> 4) >> 1;
+        final int radiusSections = Math.max(0, effectiveRadius()) >> 1;
+        final int playerSecX = (player.getBlockX() >> 4) >> 1;
+        final int playerSecZ = (player.getBlockZ() >> 4) >> 1;
 
         lastManifestCenterSecX = playerSecX;
         lastManifestCenterSecZ = playerSecZ;
         lastManifestDim = dim;
         manifestSent = true;
+        manifestBuilding = true;
 
+        final WorldIdentifier fWorldId = worldId;
+        final Identifier fDim = dim;
+        Thread t = new Thread(() -> {
+            try {
+                buildAndSendManifestWorker(fWorldId, fDim, playerSecX, playerSecZ, radiusSections);
+            } catch (Exception e) {
+                me.cortex.voxy.common.Logger.error("voxyserver manifest build failed, server will full send", e);
+                sendManifestChunk(fDim, new long[0], new long[0], true);
+            } finally {
+                manifestBuilding = false;
+            }
+        }, "VoxyServer-ManifestBuilder");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    // Runs on a background thread. Built from the in-memory hash record of sections we have
+    // already received (loading that record from its sidecar file can be large), NOT by walking
+    // Voxy's on-disk RocksDB store. Neither operation touches the render thread.
+    private static void buildAndSendManifestWorker(WorldIdentifier worldId, Identifier dim,
+                                                   int playerSecX, int playerSecZ, int radiusSections) {
         Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(worldId.getWorldId());
 
         LongArrayList keys = new LongArrayList();
         LongArrayList hashes = new LongArrayList();
-        engine.storage.iteratePositions(0, key -> {
+        for (var entry : stored.long2LongEntrySet()) {
+            long key = entry.getLongKey();
             int sx = WorldEngine.getX(key);
             int sz = WorldEngine.getZ(key);
-            if (Math.abs(sx - playerSecX) > radiusSections || Math.abs(sz - playerSecZ) > radiusSections) return;
-            if (!stored.containsKey(key)) return;
+            if (Math.abs(sx - playerSecX) > radiusSections || Math.abs(sz - playerSecZ) > radiusSections) continue;
             keys.add(key);
-            hashes.add(stored.get(key));
-        });
+            hashes.add(entry.getLongValue());
+        }
 
         int total = keys.size();
         if (total == 0) {
@@ -171,9 +175,13 @@ public class ClientLodSettings {
         }
     }
 
+    // may be called from the manifest worker thread, so send via the client executor
     private static void sendManifestChunk(Identifier dimension, long[] keys, long[] hashes, boolean complete) {
-        if (Minecraft.getInstance().getConnection() == null) return;
-        ClientPlayNetworking.send(new LODManifestPayload(dimension, keys, hashes, complete));
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> {
+            if (mc.getConnection() == null) return;
+            ClientPlayNetworking.send(new LODManifestPayload(dimension, keys, hashes, complete));
+        });
     }
 
     public static void reset() {
@@ -182,6 +190,7 @@ public class ClientLodSettings {
         protocolOk = false;
         lastManifestDim = null;
         manifestSent = false;
+        manifestBuilding = false;
         activeServerKey = null;
         activePreferences = CONFIG.getPreferencesForServer(null);
     }
@@ -192,6 +201,26 @@ public class ClientLodSettings {
 
     public static boolean isEnabled() {
         return activePreferences.enabled;
+    }
+
+    public static boolean isDownloadHudEnabled() {
+        return Boolean.TRUE.equals(CONFIG.showDownloadHud);
+    }
+
+    public static void setDownloadHudEnabled(boolean value) {
+        CONFIG.showDownloadHud = value;
+    }
+
+    public static boolean isDownloadHudTopLeft() {
+        return Boolean.TRUE.equals(CONFIG.hudTopLeft);
+    }
+
+    public static void setDownloadHudTopLeft(boolean value) {
+        CONFIG.hudTopLeft = value;
+    }
+
+    public static void saveClientConfig() {
+        CONFIG.save();
     }
 
     public static int getServerMaxRadius() {

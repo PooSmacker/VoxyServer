@@ -19,7 +19,7 @@ public abstract class LevelChunkMixin {
     public abstract Level getLevel();
 
     @Inject(method = "setBlockState", at = @At("RETURN"))
-    private void voxyserver$onBlockChanged(BlockPos pos, BlockState state, int moved, CallbackInfoReturnable<BlockState> cir) {
+    private void voxyserver$onBlockChanged(BlockPos pos, BlockState state, boolean moved, CallbackInfoReturnable<BlockState> cir) {
         if (cir.getReturnValue() == null) return; // no actual change
         Level level = this.getLevel();
         if (!(level instanceof ServerLevel serverLevel)) return;

@@ -3,25 +3,25 @@ package com.dripps.voxyserver.network;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.ArrayList;
 import java.util.List;
 
 // batch of lod sections sent together for efficiency
 public record LODBulkPayload(
-        Identifier dimension,
+        ResourceLocation dimension,
         List<LODSectionPayload> sections
 ) implements CustomPacketPayload {
 
     public static final Type<LODBulkPayload> TYPE =
-            new Type<>(Identifier.parse("voxyserver:lod_bulk"));
+            new Type<>(ResourceLocation.parse("voxyserver:lod_bulk"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, LODBulkPayload> CODEC =
             StreamCodec.of(LODBulkPayload::write, LODBulkPayload::read);
 
     private static void write(RegistryFriendlyByteBuf buf, LODBulkPayload payload) {
-        buf.writeIdentifier(payload.dimension);
+        buf.writeResourceLocation(payload.dimension);
         buf.writeVarInt(payload.sections.size());
         for (LODSectionPayload section : payload.sections) {
             buf.writeLong(section.sectionKey());
@@ -53,7 +53,7 @@ public record LODBulkPayload(
     }
 
     private static LODBulkPayload read(RegistryFriendlyByteBuf buf) {
-        Identifier dimension = buf.readIdentifier();
+        ResourceLocation dimension = buf.readResourceLocation();
         int count = buf.readVarInt();
         List<LODSectionPayload> sections = new ArrayList<>(count);
         for (int s = 0; s < count; s++) {

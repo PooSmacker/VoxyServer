@@ -19,7 +19,7 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -64,36 +64,36 @@ public class LodStreamingService {
     private final IdentityHashMap<Mapper, int[]> biomeIdCaches = new IdentityHashMap<>();
 
     // we try to recover from voxy state corruption as best we can but the fix is rlly in voxy, all i can do for now.
-    private final Set<Identifier> corruptedDimensions = ConcurrentHashMap.newKeySet();
+    private final Set<ResourceLocation> corruptedDimensions = ConcurrentHashMap.newKeySet();
     private volatile long lastStreamHeartbeat = System.nanoTime();
-    private volatile Identifier currentStreamDimension;
+    private volatile ResourceLocation currentStreamDimension;
     private static final long STREAM_WORKER_STUCK_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private record SnapshotBatch(MinecraftServer server, List<PlayerSnapshot> snapshots) {}
 
     private static final class DimensionOrdinals {
-        private final ConcurrentHashMap<Identifier, Integer> dimToOrdinal = new ConcurrentHashMap<>();
-        private volatile Identifier[] ordinalToDim = new Identifier[0];
+        private final ConcurrentHashMap<ResourceLocation, Integer> dimToOrdinal = new ConcurrentHashMap<>();
+        private volatile ResourceLocation[] ordinalToDim = new ResourceLocation[0];
 
-        int getOrdinal(Identifier dim) {
+        int getOrdinal(ResourceLocation dim) {
             Integer ord = dimToOrdinal.get(dim);
             if (ord != null) return ord;
             return register(dim);
         }
 
-        private synchronized int register(Identifier dim) {
+        private synchronized int register(ResourceLocation dim) {
             Integer ord = dimToOrdinal.get(dim);
             if (ord != null) return ord;
             int o = ordinalToDim.length;
             if (o >= 16) throw new IllegalStateException("too many dimensions for key encoding (max 16)");
-            Identifier[] newArr = Arrays.copyOf(ordinalToDim, o + 1);
+            ResourceLocation[] newArr = Arrays.copyOf(ordinalToDim, o + 1);
             newArr[o] = dim;
             ordinalToDim = newArr;
             dimToOrdinal.put(dim, o);
             return o;
         }
 
-        Identifier getDimension(int ordinal) {
+        ResourceLocation getDimension(int ordinal) {
             return ordinalToDim[ordinal];
         }
     }
@@ -162,13 +162,13 @@ public class LodStreamingService {
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
     }
 
-    public void markChunkPendingDirty(Identifier dimension, int chunkX, int sectionY, int chunkZ) {
+    public void markChunkPendingDirty(ResourceLocation dimension, int chunkX, int sectionY, int chunkZ) {
         long key = WorldEngine.getWorldSectionId(0, chunkX >> 1, sectionY, chunkZ >> 1);
         long blockUntilTick = currentTick + pendingDirtyTimeoutTicks;
         pendingDirtySections.put(composeSectionKey(dimOrdinals.getOrdinal(dimension), key), blockUntilTick);
     }
 
-    public void markChunkPendingInitialLoad(Identifier dimension, int chunkX, int sectionY, int chunkZ) {
+    public void markChunkPendingInitialLoad(ResourceLocation dimension, int chunkX, int sectionY, int chunkZ) {
         long key = WorldEngine.getWorldSectionId(0, chunkX >> 1, sectionY, chunkZ >> 1);
         long compositeKey = composeSectionKey(dimOrdinals.getOrdinal(dimension), key);
         long blockUntilTick = currentTick + pendingDirtyTimeoutTicks;
@@ -178,14 +178,14 @@ public class LodStreamingService {
                 currentDeadline == null ? graceUntilTick : Math.max(currentDeadline, graceUntilTick));
     }
 
-    public void clearChunkPendingDirty(Identifier dimension, int chunkX, int sectionY, int chunkZ) {
+    public void clearChunkPendingDirty(ResourceLocation dimension, int chunkX, int sectionY, int chunkZ) {
         long key = WorldEngine.getWorldSectionId(0, chunkX >> 1, sectionY, chunkZ >> 1);
         long compositeKey = composeSectionKey(dimOrdinals.getOrdinal(dimension), key);
         pendingDirtySections.remove(compositeKey);
         initialLoadSections.remove(compositeKey);
     }
 
-    public void onChunkLoadStateChanged(Identifier dimension, int chunkX, int chunkZ, boolean loaded) {
+    public void onChunkLoadStateChanged(ResourceLocation dimension, int chunkX, int chunkZ, boolean loaded) {
         long chunkKey = composeChunkKey(dimOrdinals.getOrdinal(dimension), chunkX, chunkZ);
         if (loaded) {
             loadedChunks.add(chunkKey);
@@ -205,7 +205,7 @@ public class LodStreamingService {
 
     // snapshot player state on the tick thread for async processing
     private record PlayerSnapshot(UUID uuid, int chunkX, int chunkZ,
-                                   WorldIdentifier worldId, Identifier dimension,
+                                   WorldIdentifier worldId, ResourceLocation dimension,
                                    int minY, int maxY,
                                    Registry<Biome> biomeRegistry) {}
 
@@ -225,7 +225,7 @@ public class LodStreamingService {
             if (tracker == null || !tracker.isReady() || !tracker.isLodEnabled()) continue;
 
             tracker.updatePosition(player);
-            ServerLevel level = player.level();
+            ServerLevel level = player.serverLevel();
             WorldIdentifier worldId = WorldIdentifier.of(level);
             if (worldId == null) continue;
 
@@ -234,10 +234,10 @@ public class LodStreamingService {
                     tracker.getLastChunkX(),
                     tracker.getLastChunkZ(),
                     worldId,
-                    level.dimension().identifier(),
-                    level.getMinSectionY() >> 1,
-                    (level.getMaxSectionY() >> 1) + 1,
-                    level.registryAccess().lookupOrThrow(Registries.BIOME)
+                    level.dimension().location(),
+                    level.getMinSection() >> 1,
+                    (level.getMaxSection() >> 1) + 1,
+                    level.registryAccess().registryOrThrow(Registries.BIOME)
             ));
         }
 
@@ -273,12 +273,12 @@ public class LodStreamingService {
         if (tracker == null || !tracker.isReady()) return;
 
         tracker.reset();
-        Identifier dim = newLevel.dimension().identifier();
+        ResourceLocation dim = newLevel.dimension().location();
         ServerPlayNetworking.send(player, LODClearPayload.clearDimension(dim));
     }
 
     public void clearDimensionForReadyPlayers(ServerLevel level) {
-        Identifier dim = level.dimension().identifier();
+        ResourceLocation dim = level.dimension().location();
         for (var entry : trackers.entrySet()) {
             PlayerLodTracker tracker = entry.getValue();
             if (tracker == null || !tracker.isReady()) continue;
@@ -356,7 +356,7 @@ public class LodStreamingService {
 
         if (!batch.isEmpty()) {
             List<LODSectionPayload> toSend = List.copyOf(batch);
-            Identifier dim = snap.dimension;
+            ResourceLocation dim = snap.dimension;
             UUID playerId = snap.uuid;
 
             // preserialize on stream thread so no heavy encoding on tick thread
@@ -370,7 +370,7 @@ public class LodStreamingService {
             server.execute(() -> {
                 ServerPlayer player = server.getPlayerList().getPlayer(playerId);
                 if (player == null) return;
-                if (!player.level().dimension().identifier().equals(dim)) return;
+                if (!player.level().dimension().location().equals(dim)) return;
                 for (PreSerializedLodPayload pkt : preEncoded) {
                     ServerPlayNetworking.send(player, pkt);
                 }
@@ -378,7 +378,7 @@ public class LodStreamingService {
         }
     }
 
-    private LODSectionPayload serializeSection(WorldSection section, Identifier dimension,
+    private LODSectionPayload serializeSection(WorldSection section, ResourceLocation dimension,
                                                 Mapper mapper, Registry<Biome> biomeRegistry) {
         long[] data = section.copyData();
 
@@ -432,7 +432,7 @@ public class LodStreamingService {
         return vanillaId;
     }
 
-    private void onWorldSectionDirty(Identifier dimension, long sectionKey) {
+    private void onWorldSectionDirty(ResourceLocation dimension, long sectionKey) {
         if (WorldEngine.getLevel(sectionKey) != 0) {
             return;
         }
@@ -470,7 +470,7 @@ public class LodStreamingService {
 
         initialLoadSections.remove(compositeKey);
 
-        Identifier dimension = dimOrdinals.getDimension(extractSectionDimOrdinal(compositeKey));
+        ResourceLocation dimension = dimOrdinals.getDimension(extractSectionDimOrdinal(compositeKey));
         long sectionKey = extractSectionKey(compositeKey);
 
         int version = sectionVersions.compute(compositeKey, (ignored, currentVersion) -> {
@@ -486,7 +486,7 @@ public class LodStreamingService {
         pushDirtySection(server, level, dimension, sectionKey, version);
     }
 
-    private void pushDirtySection(MinecraftServer server, ServerLevel level, Identifier dimension, long sectionKey, int version) {
+    private void pushDirtySection(MinecraftServer server, ServerLevel level, ResourceLocation dimension, long sectionKey, int version) {
         if (corruptedDimensions.contains(dimension)) return;
         currentStreamDimension = dimension;
         WorldIdentifier worldId = WorldIdentifier.of(level);
@@ -503,7 +503,7 @@ public class LodStreamingService {
         WorldSection section = world.acquireIfExists(sectionKey);
         if (section == null) return;
 
-        Registry<Biome> biomeRegistry = level.registryAccess().lookupOrThrow(Registries.BIOME);
+        Registry<Biome> biomeRegistry = level.registryAccess().registryOrThrow(Registries.BIOME);
         boolean sectionCorrupted = false;
         LODSectionPayload payload;
         try {
@@ -590,9 +590,9 @@ public class LodStreamingService {
         }
     }
 
-    private static ServerLevel findLevel(MinecraftServer server, Identifier dimension) {
+    private static ServerLevel findLevel(MinecraftServer server, ResourceLocation dimension) {
         for (ServerLevel level : server.getAllLevels()) {
-            if (level.dimension().identifier().equals(dimension)) {
+            if (level.dimension().location().equals(dimension)) {
                 return level;
             }
         }
@@ -695,7 +695,7 @@ public class LodStreamingService {
         }
         long elapsed = System.nanoTime() - lastStreamHeartbeat;
         if (elapsed > STREAM_WORKER_STUCK_NANOS) {
-            Identifier dim = currentStreamDimension;
+            ResourceLocation dim = currentStreamDimension;
             if (dim != null) {
                 handleVoxyCorruption(dim, "stuck stream worker (no heartbeat for "
                         + TimeUnit.NANOSECONDS.toSeconds(elapsed) + "s)", null);
@@ -718,7 +718,7 @@ public class LodStreamingService {
         }
     }
 
-    private void handleVoxyCorruption(Identifier dimension, String context, Exception e) {
+    private void handleVoxyCorruption(ResourceLocation dimension, String context, Exception e) {
         if (!corruptedDimensions.add(dimension)) return;
         if (e != null) {
             Voxyserver.LOGGER.error(

@@ -1,6 +1,6 @@
 package com.dripps.voxyserver.server;
 
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -18,8 +18,8 @@ public class DirtyTracker {
     private final int flushInterval;
     private int tickCounter = 0;
 
-    private record DirtySection(Identifier dimension, int chunkX, int sectionY, int chunkZ) {}
-    private record ChunkPosDim(Identifier dimension, int chunkX, int chunkZ) {}
+    private record DirtySection(ResourceLocation dimension, int chunkX, int sectionY, int chunkZ) {}
+    private record ChunkPosDim(ResourceLocation dimension, int chunkX, int chunkZ) {}
 
     public DirtyTracker(ChunkVoxelizer voxelizer, LodStreamingService streamingService, int flushInterval) {
         this.voxelizer = voxelizer;
@@ -28,7 +28,7 @@ public class DirtyTracker {
     }
 
     public void markDirty(ServerLevel level, int chunkX, int blockY, int chunkZ) {
-        Identifier dim = level.dimension().identifier();
+        ResourceLocation dim = level.dimension().location();
         int sectionY = blockY >> 5;
         DirtySection dirtySection = new DirtySection(dim, chunkX, sectionY, chunkZ);
         dirtySections.put(dirtySection, Boolean.TRUE);
@@ -77,9 +77,9 @@ public class DirtyTracker {
         }
     }
 
-    private static ServerLevel findLevel(MinecraftServer server, Identifier dimension) {
+    private static ServerLevel findLevel(MinecraftServer server, ResourceLocation dimension) {
         for (ServerLevel level : server.getAllLevels()) {
-            if (level.dimension().identifier().equals(dimension)) {
+            if (level.dimension().location().equals(dimension)) {
                 return level;
             }
         }

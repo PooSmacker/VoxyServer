@@ -118,14 +118,14 @@ public class WorldImportCoordinator {
             source.sendFailure(Component.literal("current can only be used by a player"));
             return false;
         }
-        return this.startDimension(source, player.level());
+        return this.startDimension(source, player.serverLevel());
     }
 
     public boolean startDimension(CommandSourceStack source, ServerLevel level) {
         MinecraftServer server = source.getServer();
         Path regionPath = getRegionPath(server, level);
         if (!Files.isDirectory(regionPath)) {
-            source.sendFailure(Component.literal("no region folder found for " + level.dimension().identifier()));
+            source.sendFailure(Component.literal("no region folder found for " + level.dimension().location()));
             return false;
         }
 
@@ -141,7 +141,7 @@ public class WorldImportCoordinator {
             this.queue.addLast(new ImportRequest(server, level, regionPath, source));
         }
 
-        source.sendSuccess(() -> Component.literal("queued import for " + level.dimension().identifier()), true);
+        source.sendSuccess(() -> Component.literal("queued import for " + level.dimension().location()), true);
         this.startNext(runId);
         return true;
     }
@@ -206,7 +206,7 @@ public class WorldImportCoordinator {
             return;
         }
 
-        var world = this.engine.getOrCreate(worldId, request.level.dimension().identifier());
+        var world = this.engine.getOrCreate(worldId, request.level.dimension().location());
         if (world == null) {
             request.server.execute(() -> {
                 sendFailure(request.source, "could not create voxy world for " + request.dimensionId);
@@ -354,7 +354,7 @@ public class WorldImportCoordinator {
             this.level = level;
             this.regionPath = regionPath;
             this.source = source;
-            this.dimensionId = level.dimension().identifier().toString().toLowerCase(Locale.ROOT);
+            this.dimensionId = level.dimension().location().toString().toLowerCase(Locale.ROOT);
         }
     }
 

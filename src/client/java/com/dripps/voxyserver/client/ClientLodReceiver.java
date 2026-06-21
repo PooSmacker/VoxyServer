@@ -114,14 +114,14 @@ public class ClientLodReceiver {
 
     private static long[] remapLut(int[] blockStateIds, int[] biomeIds, byte[] light,
                                     Mapper mapper, ClientLevel level) {
-        Registry<Biome> biomeRegistry = level.registryAccess().lookupOrThrow(Registries.BIOME);
+        Registry<Biome> biomeRegistry = level.registryAccess().registryOrThrow(Registries.BIOME);
         long[] remapped = new long[blockStateIds.length];
 
         for (int i = 0; i < blockStateIds.length; i++) {
             BlockState state = Block.BLOCK_STATE_REGISTRY.byId(blockStateIds[i]);
             int clientBlockId = (state != null) ? mapper.getIdForBlockState(state) : 0;
 
-            Optional<Holder.Reference<Biome>> biomeHolder = biomeRegistry.get(biomeIds[i]);
+            Optional<Holder.Reference<Biome>> biomeHolder = biomeRegistry.getHolder(biomeIds[i]);
             int clientBiomeId = biomeHolder.map(mapper::getIdForBiome).orElse(0);
 
             remapped[i] = Mapper.composeMappingId(light[i], clientBlockId, clientBiomeId);

@@ -3,7 +3,7 @@ package com.dripps.voxyserver.util;
 import me.cortex.voxy.common.world.other.Mapper;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
@@ -21,7 +21,7 @@ public class IdRemapper {
 
     // get vanilla biome registry id from a voxy mapper long id
     public static int toVanillaBiomeId(ServerLevel level, Mapper mapper, long mappingId) {
-        Registry<Biome> biomeRegistry = level.registryAccess().lookupOrThrow(Registries.BIOME);
+        Registry<Biome> biomeRegistry = level.registryAccess().registryOrThrow(Registries.BIOME);
         return toVanillaBiomeIdFromMapper(mapper, mappingId, biomeRegistry);
     }
 
@@ -37,8 +37,8 @@ public class IdRemapper {
         if (biomeId >= entries.length) return 0;
         String biomeName = entries[biomeId].biome;
         if (biomeName == null) return 0;
-        Identifier biomeKey = Identifier.parse(biomeName);
-        return biomeRegistry.getId(biomeRegistry.getValue(biomeKey));
+        ResourceLocation biomeKey = ResourceLocation.parse(biomeName);
+        return biomeRegistry.getId(biomeRegistry.get(biomeKey));
     }
 
     public static int getLightFromMapping(long mappingId) {

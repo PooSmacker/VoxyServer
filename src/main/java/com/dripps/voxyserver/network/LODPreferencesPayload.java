@@ -3,7 +3,7 @@ package com.dripps.voxyserver.network;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 public record LODPreferencesPayload(
         boolean enabled,
@@ -12,7 +12,7 @@ public record LODPreferencesPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<LODPreferencesPayload> TYPE =
-            new Type<>(Identifier.parse("voxyserver:lod_preferences"));
+            new Type<>(ResourceLocation.parse("voxyserver:lod_preferences"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, LODPreferencesPayload> CODEC =
             StreamCodec.of(LODPreferencesPayload::write, LODPreferencesPayload::read);

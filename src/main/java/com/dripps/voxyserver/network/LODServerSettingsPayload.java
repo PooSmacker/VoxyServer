@@ -3,7 +3,7 @@ package com.dripps.voxyserver.network;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 public record LODServerSettingsPayload(
         int maxLodStreamRadius,
@@ -11,7 +11,7 @@ public record LODServerSettingsPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<LODServerSettingsPayload> TYPE =
-            new Type<>(Identifier.parse("voxyserver:lod_server_settings"));
+            new Type<>(ResourceLocation.parse("voxyserver:lod_server_settings"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, LODServerSettingsPayload> CODEC =
             StreamCodec.of(LODServerSettingsPayload::write, LODServerSettingsPayload::read);

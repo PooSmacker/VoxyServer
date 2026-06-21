@@ -4,7 +4,7 @@ import com.dripps.voxyserver.Voxyserver;
 import me.cortex.voxy.common.world.WorldEngine;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -24,7 +24,7 @@ public class ChunkVoxelizer {
     private final ConcurrentHashMap<PendingChunk, Long> pendingChunkRetries = new ConcurrentHashMap<>();
     private long currentTick;
 
-    private record PendingChunk(Identifier dimension, int chunkX, int chunkZ) {}
+    private record PendingChunk(ResourceLocation dimension, int chunkX, int chunkZ) {}
 
     public ChunkVoxelizer(ServerLodEngine engine, LodStreamingService streamingService,
                           com.dripps.voxyserver.config.VoxyServerConfig config) {
@@ -43,9 +43,9 @@ public class ChunkVoxelizer {
     }
 
     private void onChunkLoad(ServerLevel level, LevelChunk chunk) {
-        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z, true);
+        streamingService.onChunkLoadStateChanged(level.dimension().location(), chunk.getPos().x, chunk.getPos().z, true);
         if (ingestChunk(level, chunk, true)) {
-            pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z));
+            pendingChunkRetries.remove(new PendingChunk(level.dimension().location(), chunk.getPos().x, chunk.getPos().z));
             return;
         }
 
@@ -53,8 +53,8 @@ public class ChunkVoxelizer {
     }
 
     private void onChunkUnload(ServerLevel level, LevelChunk chunk) {
-        streamingService.onChunkLoadStateChanged(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z, false);
-        pendingChunkRetries.remove(new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z));
+        streamingService.onChunkLoadStateChanged(level.dimension().location(), chunk.getPos().x, chunk.getPos().z, false);
+        pendingChunkRetries.remove(new PendingChunk(level.dimension().location(), chunk.getPos().x, chunk.getPos().z));
         if (ingestOnChunkUnload) {
             ingestChunk(level, chunk, false);
         }
@@ -74,7 +74,7 @@ public class ChunkVoxelizer {
 
         boolean enqueued = engine.getIngestService().enqueueIngest(world, chunk);
         if (!enqueued && !pendingSectionYs.isEmpty()) {
-            clearPendingChunkSections(level.dimension().identifier(), chunk, pendingSectionYs);
+            clearPendingChunkSections(level.dimension().location(), chunk, pendingSectionYs);
         }
         return enqueued;
     }
@@ -84,9 +84,9 @@ public class ChunkVoxelizer {
     }
 
     private List<Integer> markPendingChunkSections(ServerLevel level, LevelChunk chunk) {
-        Identifier dimension = level.dimension().identifier();
+        ResourceLocation dimension = level.dimension().location();
         List<Integer> pendingSectionYs = new ArrayList<>();
-        int chunkSectionY = chunk.getMinSectionY() - 1;
+        int chunkSectionY = chunk.getMinSection() - 1;
         int lastWorldSecY = Integer.MIN_VALUE;
         for (var ignored : chunk.getSections()) {
             chunkSectionY++;
@@ -102,7 +102,7 @@ public class ChunkVoxelizer {
         return pendingSectionYs;
     }
 
-    private void clearPendingChunkSections(Identifier dimension, LevelChunk chunk, List<Integer> pendingSectionYs) {
+    private void clearPendingChunkSections(ResourceLocation dimension, LevelChunk chunk, List<Integer> pendingSectionYs) {
         for (int worldSecY : pendingSectionYs) {
             streamingService.clearChunkPendingDirty(dimension, chunk.getPos().x, worldSecY, chunk.getPos().z);
         }
@@ -110,7 +110,7 @@ public class ChunkVoxelizer {
 
     private void scheduleRetry(ServerLevel level, LevelChunk chunk) {
         pendingChunkRetries.put(
-                new PendingChunk(level.dimension().identifier(), chunk.getPos().x, chunk.getPos().z),
+                new PendingChunk(level.dimension().location(), chunk.getPos().x, chunk.getPos().z),
                 currentTick + RETRY_INTERVAL_TICKS
         );
     }
@@ -148,9 +148,9 @@ public class ChunkVoxelizer {
         }
     }
 
-    private static ServerLevel findLevel(MinecraftServer server, Identifier dimension) {
+    private static ServerLevel findLevel(MinecraftServer server, ResourceLocation dimension) {
         for (ServerLevel level : server.getAllLevels()) {
-            if (level.dimension().identifier().equals(dimension)) {
+            if (level.dimension().location().equals(dimension)) {
                 return level;
             }
         }

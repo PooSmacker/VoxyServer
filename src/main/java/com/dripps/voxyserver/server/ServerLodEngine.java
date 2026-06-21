@@ -8,7 +8,7 @@ import me.cortex.voxy.common.config.section.SectionSerializationStorage;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
 
@@ -22,12 +22,12 @@ import java.util.concurrent.TimeUnit;
 public class ServerLodEngine extends VoxyInstance {
     @FunctionalInterface
     public interface DirtySectionListener {
-        void onSectionDirty(Identifier dimension, long sectionKey);
+        void onSectionDirty(ResourceLocation dimension, long sectionKey);
     }
 
     private final Path basePath;
     private final SectionSerializationStorage.Config storageConfig;
-    private final ConcurrentHashMap<WorldIdentifier, Identifier> dimensionsByWorld = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<WorldIdentifier, ResourceLocation> dimensionsByWorld = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WorldIdentifier, StoredSectionPresenceIndex> presenceIndexes = new ConcurrentHashMap<>();
     private final ExecutorService presenceIndexExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "VoxyServer Presence Index");
@@ -57,10 +57,10 @@ public class ServerLodEngine extends VoxyInstance {
         if (worldId == null) {
             return null;
         }
-        return this.getOrCreate(worldId, level.dimension().identifier());
+        return this.getOrCreate(worldId, level.dimension().location());
     }
 
-    public WorldEngine getOrCreate(WorldIdentifier identifier, Identifier dimension) {
+    public WorldEngine getOrCreate(WorldIdentifier identifier, ResourceLocation dimension) {
         if (identifier == null || !this.isRunning()) {
             return null;
         }
@@ -120,7 +120,7 @@ public class ServerLodEngine extends VoxyInstance {
 
         int worldSecX = chunk.getPos().x >> 1;
         int worldSecZ = chunk.getPos().z >> 1;
-        int chunkSectionY = chunk.getMinSectionY() - 1;
+        int chunkSectionY = chunk.getMinSection() - 1;
         int lastWorldSecY = Integer.MIN_VALUE;
         for (var ignored : chunk.getSections()) {
             chunkSectionY++;
@@ -177,7 +177,7 @@ public class ServerLodEngine extends VoxyInstance {
             return;
         }
 
-        Identifier dimension = this.dimensionsByWorld.get(identifier);
+        ResourceLocation dimension = this.dimensionsByWorld.get(identifier);
         DirtySectionListener listener = this.dirtySectionListener;
         if (dimension == null || listener == null) {
             return;

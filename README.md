@@ -2,7 +2,7 @@
 
 a fabric server side mod that voxelizes chunks into LODs using [voxy](https://github.com/MCRcortex/voxy) and streams them to connected clients. players with voxy installed will receive LOD data from the server automatically, no client side world scanning/loading needed.
 
-**Latest: minecraft 26.1.x | fabric**
+**Latest: minecraft 26.2 | fabric**
 
 ## how it works
 

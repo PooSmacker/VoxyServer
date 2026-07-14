@@ -433,7 +433,6 @@ public class LodStreamingService {
             WorldSection section = world.acquireIfExists(key);
             if (section == null) continue;
 
-            boolean sectionCorrupted = false;
             try {
                 LODSectionPayload payload = serializeSection(section, snap.dimension, mapper, snap.biomeRegistry);
                 if (payload != null) {
@@ -446,14 +445,8 @@ public class LodStreamingService {
                     }
                 }
             } finally {
-                try {
-                    section.release();
-                } catch (IllegalStateException e) {
-                    handleVoxyCorruption(snap.dimension, "streamForSnapshot section.release()", e);
-                    sectionCorrupted = true;
-                }
+                section.release();
             }
-            if (sectionCorrupted) break;
         }
 
         if (!batch.isEmpty()) {
@@ -656,19 +649,13 @@ public class LodStreamingService {
         if (section == null) return;
 
         Registry<Biome> biomeRegistry = level.registryAccess().lookupOrThrow(Registries.BIOME);
-        boolean sectionCorrupted = false;
         LODSectionPayload payload;
         try {
             payload = serializeSection(section, dimension, mapper, biomeRegistry);
         } finally {
-            try {
-                section.release();
-            } catch (IllegalStateException e) {
-                handleVoxyCorruption(dimension, "pushDirtySection section.release()", e);
-                sectionCorrupted = true;
-            }
+            section.release();
         }
-        if (sectionCorrupted || payload == null) {
+        if (payload == null) {
             return;
         }
 

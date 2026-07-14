@@ -2,6 +2,7 @@ package com.dripps.voxyserver.client.service;
 
 import me.cortex.voxy.common.Logger;
 import com.dripps.voxyserver.client.ClientLodHashStore;
+import com.dripps.voxyserver.network.LODBulkPayload;
 import com.dripps.voxyserver.network.LODSectionPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
 import me.cortex.voxy.common.thread.Service;
@@ -16,20 +17,26 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class RemoteIngestService {
 
-    private record IngestTask(WorldIdentifier worldId, PreSerializedLodPayload raw, RegistryAccess registryAccess) {}
+    private record IngestTask(WorldIdentifier worldId, Identifier dimension,
+                              PreSerializedLodPayload raw, RegistryAccess registryAccess,
+                              long generation) {}
 
     private final Service service;
     private final ConcurrentLinkedDeque<IngestTask> ingestQueue = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Runnable> manifestQueue = new ConcurrentLinkedDeque<>();
+    private final AtomicLong dimensionGeneration = new AtomicLong();
+    private volatile Identifier activeDimension;
 
     public RemoteIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(
@@ -48,6 +55,13 @@ public class RemoteIngestService {
 
         IngestTask task = this.ingestQueue.poll();
         if (task == null) return;
+        if (task.generation() != this.dimensionGeneration.get()) return;
+        if (!task.dimension().equals(this.activeDimension)) return;
+
+        LODBulkPayload bulk = task.raw().decodeBulk(task.registryAccess());
+        if (!task.dimension().equals(bulk.dimension())) return;
+        if (task.generation() != this.dimensionGeneration.get()) return;
+        if (!task.dimension().equals(this.activeDimension)) return;
 
         WorldEngine engine = task.worldId().getOrCreateEngine();
         if (engine == null || !engine.isLive()) return;
@@ -56,7 +70,9 @@ public class RemoteIngestService {
         String worldIdHash = task.worldId().getWorldId();
         Mapper mapper = engine.getMapper();
 
-        for (LODSectionPayload section : task.raw().decodeBulk(task.registryAccess()).sections()) {
+        for (LODSectionPayload section : bulk.sections()) {
+            if (task.generation() != this.dimensionGeneration.get()) return;
+            if (!task.dimension().equals(this.activeDimension)) return;
             long[] remappedLut = remapLut(
                     section.lutBlockStateIds(),
                     section.lutBiomeIds(),
@@ -117,10 +133,17 @@ public class RemoteIngestService {
         return remapped;
     }
 
-    public void enqueueIngest(WorldIdentifier worldId, PreSerializedLodPayload raw, RegistryAccess registryAccess) {
+    public void enqueueIngest(WorldIdentifier worldId, Identifier dimension,
+                              PreSerializedLodPayload raw, RegistryAccess registryAccess) {
         if (!this.service.isLive()) return;
 
-        this.ingestQueue.add(new IngestTask(worldId, raw, registryAccess));
+        this.ingestQueue.add(new IngestTask(
+                worldId,
+                dimension,
+                raw,
+                registryAccess,
+                this.dimensionGeneration.get()
+        ));
 
         try {
             this.service.execute();
@@ -145,7 +168,16 @@ public class RemoteIngestService {
         return this.service.isLive();
     }
 
+    public void setActiveDimension(Identifier dimension) {
+        if (java.util.Objects.equals(this.activeDimension, dimension)) return;
+        this.activeDimension = dimension;
+        this.dimensionGeneration.incrementAndGet();
+    }
+
     public void shutdown() {
+        this.activeDimension = null;
+        this.ingestQueue.clear();
+        this.manifestQueue.clear();
         this.service.shutdown();
     }
 }

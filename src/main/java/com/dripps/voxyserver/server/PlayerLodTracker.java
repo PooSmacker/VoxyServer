@@ -14,6 +14,7 @@ public class PlayerLodTracker {
 
     private Identifier awaitingManifestDim;
     private long manifestDeadlineTick;
+    private volatile Identifier activeDimension;
     private int lastChunkX;
     private int lastChunkZ;
 
@@ -63,6 +64,16 @@ public class PlayerLodTracker {
         sentSectionHashes.put(sectionKey, hash);
     }
 
+    public synchronized void applyManifestBatch(int dimensionOrdinal, long[] sectionKeys, long[] hashes) {
+        int count = Math.min(sectionKeys.length, hashes.length);
+        for (int i = 0; i < count; i++) {
+            long sectionKey = LodStreamingService.composeSectionKey(dimensionOrdinal, sectionKeys[i]);
+            if (!sentSectionHashes.containsKey(sectionKey)) {
+                sentSectionHashes.put(sectionKey, hashes[i]);
+            }
+        }
+    }
+
     public synchronized void reset() {
         sentSectionHashes.clear();
         resetScanStateLocked();
@@ -85,10 +96,10 @@ public class PlayerLodTracker {
         this.awaitingManifestDim = null;
     }
 
-    public synchronized void extendManifestWait(Identifier dimension, long deadlineTick) {
-        if (awaitingManifestDim == null) return;
-        if (!awaitingManifestDim.equals(dimension)) return;
-        this.manifestDeadlineTick = deadlineTick;
+    public synchronized void completeManifestWait(Identifier dimension) {
+        if (dimension.equals(this.awaitingManifestDim)) {
+            this.awaitingManifestDim = null;
+        }
     }
 
     // true if the scan should be gated waiting for this dims manifest. opens the gate once the deadline passes
@@ -113,6 +124,15 @@ public class PlayerLodTracker {
     public void updatePosition(ServerPlayer player) {
         this.lastChunkX = player.getBlockX() >> 4;
         this.lastChunkZ = player.getBlockZ() >> 4;
+        this.activeDimension = player.level().dimension().identifier();
+    }
+
+    public void setActiveDimension(Identifier dimension) {
+        this.activeDimension = dimension;
+    }
+
+    public boolean isActiveDimension(Identifier dimension) {
+        return dimension.equals(this.activeDimension);
     }
 
     public synchronized int sentCount() {

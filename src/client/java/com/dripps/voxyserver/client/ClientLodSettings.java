@@ -19,6 +19,7 @@ import net.minecraft.resources.Identifier;
 
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class ClientLodSettings {
@@ -38,10 +39,34 @@ public class ClientLodSettings {
 
     private static final long[] EMPTY_LONG = new long[0];
     private static final AtomicReference<ManifestRequest> pendingManifestRequest = new AtomicReference<>();
+    private static final AtomicReference<ManifestDispatch> pendingManifestDispatch = new AtomicReference<>();
     private static final AtomicBoolean manifestBuildScheduled = new AtomicBoolean(false);
+    private static final AtomicLong connectionGeneration = new AtomicLong();
+    private static final AtomicLong manifestRequestGeneration = new AtomicLong();
 
     private record ManifestRequest(WorldIdentifier worldId, Identifier dim,
-                                   int playerSecX, int playerSecZ, int radiusSections) {}
+                                   int playerSecX, int playerSecZ, int radiusSections,
+                                   long connectionGeneration, long requestGeneration) {}
+
+    private static final class ManifestSupersededException extends RuntimeException {}
+
+    private static final class ManifestDispatch {
+        private final Identifier dimension;
+        private final LongArrayList keys;
+        private final LongArrayList hashes;
+        private final long connectionGeneration;
+        private final long requestGeneration;
+        private int cursor;
+
+        private ManifestDispatch(Identifier dimension, LongArrayList keys, LongArrayList hashes,
+                                 long connectionGeneration, long requestGeneration) {
+            this.dimension = dimension;
+            this.keys = keys;
+            this.hashes = hashes;
+            this.connectionGeneration = connectionGeneration;
+            this.requestGeneration = requestGeneration;
+        }
+    }
 
     public static void prepareForCurrentConnection() {
         serverMaxRadius = -1;
@@ -50,12 +75,13 @@ public class ClientLodSettings {
         lastManifestDim = null;
         manifestSent = false;
         pendingManifestRequest.set(null);
+        pendingManifestDispatch.set(null);
         manifestBuildScheduled.set(false);
+        connectionGeneration.incrementAndGet();
+        manifestRequestGeneration.incrementAndGet();
         activeServerKey = resolveCurrentServerKey();
         activePreferences = CONFIG.getPreferencesForServer(activeServerKey);
     }
-
-    private static final int MANIFEST_CHUNK = 4096;
 
     public static boolean isProtocolOk() {
         return protocolOk;
@@ -63,6 +89,9 @@ public class ClientLodSettings {
 
     public static void setProtocolOk(boolean value) {
         protocolOk = value;
+        if (value && serverMaxRadius >= 0) {
+            requestManifestBuild();
+        }
     }
 
     public static void applyServerSettings(int maxRadius, int maxSections) {
@@ -102,6 +131,8 @@ public class ClientLodSettings {
         if (needRebuild) {
             requestManifestBuild();
         }
+
+        sendPendingManifestChunk(dim);
     }
 
     // client preferred radius clamped to the server max, mirrors the server side computation
@@ -132,7 +163,16 @@ public class ClientLodSettings {
         lastManifestDim = dim;
         manifestSent = true;
 
-        pendingManifestRequest.set(new ManifestRequest(worldId, dim, playerSecX, playerSecZ, radiusSections));
+        pendingManifestDispatch.set(null);
+        pendingManifestRequest.set(new ManifestRequest(
+                worldId,
+                dim,
+                playerSecX,
+                playerSecZ,
+                radiusSections,
+                connectionGeneration.get(),
+                manifestRequestGeneration.incrementAndGet()
+        ));
         scheduleManifestBuild();
     }
 
@@ -167,67 +207,105 @@ public class ClientLodSettings {
     }
 
     private static void buildManifest(ManifestRequest request) {
-        Identifier dim = request.dim();
         try {
             if (VoxyCommon.getInstance() == null) {
-                dispatchManifest(dim, null, null);
+                dispatchManifest(request, null, null);
                 return;
             }
 
-            Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(request.worldId().getWorldId());
-
-            int playerSecX = request.playerSecX();
-            int playerSecZ = request.playerSecZ();
-            int radiusSections = request.radiusSections();
-
-            LongArrayList keys = new LongArrayList();
-            LongArrayList hashes = new LongArrayList();
-            for (var entry : stored.long2LongEntrySet()) {
-                long key = entry.getLongKey();
-                if (WorldEngine.getLevel(key) != 0) continue;
-                int sx = WorldEngine.getX(key);
-                int sz = WorldEngine.getZ(key);
-                if (Math.abs(sx - playerSecX) > radiusSections || Math.abs(sz - playerSecZ) > radiusSections) continue;
-                keys.add(key);
-                hashes.add(entry.getLongValue());
+            WorldEngine engine = request.worldId().getOrCreateEngine();
+            if (engine == null || !engine.isLive()) {
+                dispatchManifest(request, null, null);
+                return;
             }
 
-            dispatchManifest(dim, keys, hashes);
+            engine.acquireRef();
+            try {
+                Long2LongOpenHashMap stored = ClientLodHashStore.get().snapshot(request.worldId().getWorldId());
+
+                int playerSecX = request.playerSecX();
+                int playerSecZ = request.playerSecZ();
+                int radiusSections = request.radiusSections();
+
+                LongArrayList keys = new LongArrayList();
+                LongArrayList hashes = new LongArrayList();
+                engine.storage.iteratePositions(0, key -> {
+                    if (!isCurrentManifestRequest(request)) throw new ManifestSupersededException();
+                    int sx = WorldEngine.getX(key);
+                    int sz = WorldEngine.getZ(key);
+                    if (Math.abs(sx - playerSecX) > radiusSections
+                            || Math.abs(sz - playerSecZ) > radiusSections
+                            || !stored.containsKey(key)) {
+                        return;
+                    }
+                    keys.add(key);
+                    hashes.add(stored.get(key));
+                });
+
+                if (isCurrentManifestRequest(request)) {
+                    dispatchManifest(request, keys, hashes);
+                }
+            } finally {
+                engine.releaseRef();
+            }
+        } catch (ManifestSupersededException ignored) {
         } catch (Exception e) {
             me.cortex.voxy.common.Logger.error("voxyserver manifest build failed, server will full send", e);
-            dispatchManifest(dim, null, null);
+            if (isCurrentManifestRequest(request)) {
+                dispatchManifest(request, null, null);
+            }
         }
     }
 
-    private static void dispatchManifest(Identifier dim, LongArrayList keys, LongArrayList hashes) {
-        int total = (keys == null) ? 0 : keys.size();
-        if (total == 0) {
-            Minecraft.getInstance().execute(() -> sendManifestChunk(dim, EMPTY_LONG, EMPTY_LONG, true));
+    private static boolean isCurrentManifestRequest(ManifestRequest request) {
+        return connectionGeneration.get() == request.connectionGeneration()
+                && manifestRequestGeneration.get() == request.requestGeneration();
+    }
+
+    private static void dispatchManifest(ManifestRequest request, LongArrayList keys, LongArrayList hashes) {
+        LongArrayList dispatchKeys = keys == null ? new LongArrayList() : keys;
+        LongArrayList dispatchHashes = hashes == null ? new LongArrayList() : hashes;
+        ManifestDispatch dispatch = new ManifestDispatch(
+                request.dim(),
+                dispatchKeys,
+                dispatchHashes,
+                request.connectionGeneration(),
+                request.requestGeneration()
+        );
+        Minecraft.getInstance().execute(() -> {
+            if (Minecraft.getInstance().getConnection() == null) return;
+            if (connectionGeneration.get() != dispatch.connectionGeneration) return;
+            if (manifestRequestGeneration.get() != dispatch.requestGeneration) return;
+            pendingManifestDispatch.set(dispatch);
+        });
+    }
+
+    private static void sendPendingManifestChunk(Identifier currentDimension) {
+        ManifestDispatch dispatch = pendingManifestDispatch.get();
+        if (dispatch == null) return;
+        if (connectionGeneration.get() != dispatch.connectionGeneration
+                || manifestRequestGeneration.get() != dispatch.requestGeneration
+                || !dispatch.dimension.equals(currentDimension)) {
+            pendingManifestDispatch.compareAndSet(dispatch, null);
             return;
         }
 
-        int chunkCount = (total + MANIFEST_CHUNK - 1) / MANIFEST_CHUNK;
-        long[][] keyChunks = new long[chunkCount][];
-        long[][] hashChunks = new long[chunkCount][];
-        for (int c = 0, i = 0; i < total; c++, i += MANIFEST_CHUNK) {
-            int end = Math.min(total, i + MANIFEST_CHUNK);
-            int n = end - i;
-            long[] k = new long[n];
-            long[] h = new long[n];
-            for (int j = 0; j < n; j++) {
-                k[j] = keys.getLong(i + j);
-                h[j] = hashes.getLong(i + j);
-            }
-            keyChunks[c] = k;
-            hashChunks[c] = h;
+        int total = dispatch.keys.size();
+        int end = Math.min(total, dispatch.cursor + LODManifestPayload.MAX_ENTRIES);
+        int count = end - dispatch.cursor;
+        long[] keys = count == 0 ? EMPTY_LONG : new long[count];
+        long[] hashes = count == 0 ? EMPTY_LONG : new long[count];
+        for (int i = 0; i < count; i++) {
+            keys[i] = dispatch.keys.getLong(dispatch.cursor + i);
+            hashes[i] = dispatch.hashes.getLong(dispatch.cursor + i);
         }
 
-        Minecraft.getInstance().execute(() -> {
-            if (Minecraft.getInstance().getConnection() == null) return;
-            for (int c = 0; c < keyChunks.length; c++) {
-                sendManifestChunk(dim, keyChunks[c], hashChunks[c], c == keyChunks.length - 1);
-            }
-        });
+        dispatch.cursor = end;
+        boolean complete = end >= total;
+        sendManifestChunk(dispatch.dimension, keys, hashes, complete);
+        if (complete) {
+            pendingManifestDispatch.compareAndSet(dispatch, null);
+        }
     }
 
     private static void sendManifestChunk(Identifier dimension, long[] keys, long[] hashes, boolean complete) {
@@ -242,7 +320,10 @@ public class ClientLodSettings {
         lastManifestDim = null;
         manifestSent = false;
         pendingManifestRequest.set(null);
+        pendingManifestDispatch.set(null);
         manifestBuildScheduled.set(false);
+        connectionGeneration.incrementAndGet();
+        manifestRequestGeneration.incrementAndGet();
         activeServerKey = null;
         activePreferences = CONFIG.getPreferencesForServer(null);
     }

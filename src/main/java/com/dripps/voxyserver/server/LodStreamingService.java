@@ -44,6 +44,7 @@ public class LodStreamingService {
     private static final long INITIAL_LOAD_GRACE_TICKS = 20L;
     private static final int INITIAL_LOAD_MIN_CHUNKS_AT_DEADLINE = 3;
     private static final int MAX_DIRTY_SECTIONS_PER_DRAIN = 64;
+    private static final int MAX_MANIFEST_BATCHES_PER_DRAIN = 4;
     // we have a grace window for the client manifest to arrive before the scan falls back to a full send
     private static final long MANIFEST_TIMEOUT_TICKS = 60L;
 
@@ -62,6 +63,7 @@ public class LodStreamingService {
     private final ConcurrentHashMap<Long, Long> initialLoadSections = new ConcurrentHashMap<>();
     private final Set<Long> loadedChunks = ConcurrentHashMap.newKeySet();
     private final Set<Long> queuedDirtySections = ConcurrentHashMap.newKeySet();
+    private final Queue<ManifestBatch> pendingManifestBatches = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicReference<SnapshotBatch> pendingSnapshotBatch = new AtomicReference<>();
     private final AtomicBoolean streamWorkerScheduled = new AtomicBoolean();
     private volatile ExecutorService streamExecutor = createStreamExecutor();
@@ -79,6 +81,8 @@ public class LodStreamingService {
     private static final long STREAM_WORKER_STUCK_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private record SnapshotBatch(MinecraftServer server, List<PlayerSnapshot> snapshots) {}
+    private record ManifestBatch(UUID playerId, Identifier dimension,
+                                 long[] keys, long[] hashes, boolean complete) {}
 
     private static final class DimensionOrdinals {
         private final ConcurrentHashMap<Identifier, Integer> dimToOrdinal = new ConcurrentHashMap<>();
@@ -108,7 +112,7 @@ public class LodStreamingService {
     }
 
     // packs dimension ordinal into the unused level bits of a level 0 section key
-    private static long composeSectionKey(int dimOrdinal, long sectionKey) {
+    static long composeSectionKey(int dimOrdinal, long sectionKey) {
         return sectionKey | ((long)(dimOrdinal & 0xF) << 60);
     }
 
@@ -148,7 +152,8 @@ public class LodStreamingService {
         });
 
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            trackers.remove(handler.getPlayer().getUUID());
+            UUID playerId = handler.getPlayer().getUUID();
+            trackers.remove(playerId);
         });
 
         ServerPlayNetworking.registerGlobalReceiver(LODHandshakePayload.TYPE, (payload, context) -> {
@@ -160,6 +165,7 @@ public class LodStreamingService {
             tracker.setReady(true);
             if (clientProto == serverProto) {
                 tracker.setProtocolOk(true);
+                tracker.setActiveDimension(player.level().dimension().identifier());
                 ServerPlayNetworking.send(player, new LODProtocolPayload(serverProto));
                 ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
                 if (hashSyncEnabled) {
@@ -183,17 +189,16 @@ public class LodStreamingService {
             if (!hashSyncEnabled) return;
             var tracker = trackers.get(context.player().getUUID());
             if (tracker == null) return;
-            int dimOrd = dimOrdinals.getOrdinal(payload.dimension());
-            long[] keys = payload.keys();
-            long[] hashes = payload.hashes();
-            for (int i = 0; i < keys.length; i++) {
-                tracker.markSent(composeSectionKey(dimOrd, keys[i]), hashes[i]);
-            }
-            if (payload.complete()) {
-                tracker.clearManifestWait();
-            } else {
-                tracker.extendManifestWait(payload.dimension(), currentTick + MANIFEST_TIMEOUT_TICKS);
-            }
+            Identifier currentDimension = context.player().level().dimension().identifier();
+            if (!currentDimension.equals(payload.dimension())) return;
+            pendingManifestBatches.add(new ManifestBatch(
+                    context.player().getUUID(),
+                    payload.dimension(),
+                    payload.keys(),
+                    payload.hashes(),
+                    payload.complete()
+            ));
+            scheduleStreamWorker();
         });
 
         ServerPlayNetworking.registerGlobalReceiver(LODPreferencesPayload.TYPE, (payload, context) -> {
@@ -254,9 +259,16 @@ public class LodStreamingService {
         this.tickInterval = tickInterval;
         this.pendingDirtyTimeoutTicks = Math.max(dirtyTrackingInterval * 2L, 40L);
         this.hashSyncEnabled = hashSyncEnabled;
+        if (!hashSyncEnabled) {
+            pendingManifestBatches.clear();
+            for (PlayerLodTracker tracker : trackers.values()) {
+                tracker.clearManifestWait();
+            }
+        }
     }
 
     public void shutdown() {
+        pendingManifestBatches.clear();
         streamExecutor.shutdownNow();
         try {
             streamExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -365,6 +377,10 @@ public class LodStreamingService {
 
         tracker.resetScanState();
         Identifier dim = newLevel.dimension().identifier();
+        tracker.setActiveDimension(dim);
+        if (hashSyncEnabled && tracker.isProtocolOk()) {
+            tracker.beginManifestWait(dim, currentTick + MANIFEST_TIMEOUT_TICKS);
+        }
         ServerPlayNetworking.send(player, LODClearPayload.clearDimension(dim));
     }
 
@@ -384,6 +400,7 @@ public class LodStreamingService {
 
     private void streamForSnapshot(MinecraftServer server, PlayerSnapshot snap, PlayerLodTracker tracker) {
         if (corruptedDimensions.contains(snap.dimension)) return;
+        if (!tracker.isActiveDimension(snap.dimension)) return;
         if (hashSyncEnabled && tracker.isManifestGated(snap.dimension, currentTick)) return;
         currentStreamDimension = snap.dimension;
         WorldEngine world = engine.getOrCreate(snap.worldId, snap.dimension);
@@ -801,7 +818,8 @@ public class LodStreamingService {
         try {
             while (true) {
                 lastStreamHeartbeat = System.nanoTime();
-                boolean didWork = drainQueuedDirtySections(server, MAX_DIRTY_SECTIONS_PER_DRAIN) > 0;
+                boolean didWork = drainManifestBatches(MAX_MANIFEST_BATCHES_PER_DRAIN) > 0;
+                didWork |= drainQueuedDirtySections(server, MAX_DIRTY_SECTIONS_PER_DRAIN) > 0;
 
                 SnapshotBatch snapshotBatch = pendingSnapshotBatch.getAndSet(null);
                 if (snapshotBatch != null) {
@@ -809,7 +827,8 @@ public class LodStreamingService {
                     processSnapshots(snapshotBatch.server(), snapshotBatch.snapshots());
                 }
 
-                if (!didWork && queuedDirtySections.isEmpty() && pendingSnapshotBatch.get() == null) {
+                if (!didWork && pendingManifestBatches.isEmpty()
+                        && queuedDirtySections.isEmpty() && pendingSnapshotBatch.get() == null) {
                     return;
                 }
             }
@@ -817,7 +836,8 @@ public class LodStreamingService {
             lastStreamHeartbeat = System.nanoTime();
             currentStreamDimension = null;
             streamWorkerScheduled.set(false);
-            if (!queuedDirtySections.isEmpty() || pendingSnapshotBatch.get() != null) {
+            if (!pendingManifestBatches.isEmpty()
+                    || !queuedDirtySections.isEmpty() || pendingSnapshotBatch.get() != null) {
                 scheduleStreamWorker();
             }
         }
@@ -855,10 +875,31 @@ public class LodStreamingService {
             streamWorkerScheduled.set(false);
             oldExecutor.shutdownNow();
 
-            if (!queuedDirtySections.isEmpty() || pendingSnapshotBatch.get() != null) {
+            if (!pendingManifestBatches.isEmpty()
+                    || !queuedDirtySections.isEmpty() || pendingSnapshotBatch.get() != null) {
                 scheduleStreamWorker();
             }
         }
+    }
+
+    private int drainManifestBatches(int maxBatches) {
+        int drained = 0;
+        while (drained < maxBatches) {
+            ManifestBatch batch = pendingManifestBatches.poll();
+            if (batch == null) break;
+            drained++;
+            lastStreamHeartbeat = System.nanoTime();
+
+            PlayerLodTracker tracker = trackers.get(batch.playerId());
+            if (tracker == null || !hashSyncEnabled || !tracker.isActiveDimension(batch.dimension())) continue;
+
+            int dimOrd = dimOrdinals.getOrdinal(batch.dimension());
+            tracker.applyManifestBatch(dimOrd, batch.keys(), batch.hashes());
+            if (batch.complete()) {
+                tracker.completeManifestWait(batch.dimension());
+            }
+        }
+        return drained;
     }
 
     private void handleVoxyCorruption(Identifier dimension, String context, Exception e) {

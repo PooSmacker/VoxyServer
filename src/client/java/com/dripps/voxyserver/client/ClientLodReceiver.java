@@ -34,6 +34,7 @@ public class ClientLodReceiver {
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLodSettings.reset();
+            setIngestDimension(null);
             setRemoteIngest(false);
             ClientLodHashStore.get().flush();
         });
@@ -77,8 +78,10 @@ public class ClientLodReceiver {
                 if (worldId == null) return;
 
                 RegistryAccess registryAccess = level.registryAccess();
+                var dimension = level.dimension().identifier();
 
-                ingestService.enqueueIngest(worldId, payload, registryAccess);
+                ingestService.setActiveDimension(dimension);
+                ingestService.enqueueIngest(worldId, dimension, payload, registryAccess);
             });
         });
 
@@ -91,6 +94,15 @@ public class ClientLodReceiver {
         VoxyInstance instance = VoxyCommon.getInstance();
         if (instance == null) return;
         ((IVoxyServerIngestAccess) instance).voxyserver$setUsingRemoteIngest(enabled);
+    }
+
+    private static void setIngestDimension(net.minecraft.resources.Identifier dimension) {
+        VoxyInstance instance = VoxyCommon.getInstance();
+        if (instance == null) return;
+        RemoteIngestService service = ((IVoxyServerIngestAccess) instance).voxyserver$getRemoteIngestService();
+        if (service != null) {
+            service.setActiveDimension(dimension);
+        }
     }
 
     private static void tellPlayer(Component message) {
@@ -107,7 +119,10 @@ public class ClientLodReceiver {
     }
 
     private static void handleClear(LODClearPayload payload) {
-        // dimension change clear is handled by voxy itself when the world changes
-        // this is a signal from the server to reset any cached state
+        Minecraft minecraft = Minecraft.getInstance();
+        ClientLevel level = minecraft.level;
+        if (level != null) {
+            setIngestDimension(level.dimension().identifier());
+        }
     }
 }

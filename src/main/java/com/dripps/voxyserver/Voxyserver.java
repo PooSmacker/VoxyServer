@@ -151,6 +151,7 @@ public class Voxyserver implements ModInitializer {
                 statsSubscribers.clear();
                 if (importCoordinator != null) importCoordinator.shutdown();
                 if (streamingService != null) streamingService.shutdown();
+                if (chunkVoxelizer != null) chunkVoxelizer.shutdown();
                 lodEngine.shutdown();
                 lodEngine = null;
                 chunkVoxelizer = null;

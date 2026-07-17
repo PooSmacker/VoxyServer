@@ -180,6 +180,10 @@ public class PlayerLodTracker {
         }
 
         if (!scanCursorInitialized) {
+            if (scanCursorDist > scanRadiusSections || scanMaxSectionY <= scanMinSectionY) {
+                markScanExhaustedLocked(currentTick, idleRescanIntervalTicks);
+                return false;
+            }
             resetScanCursorLocked();
         }
 

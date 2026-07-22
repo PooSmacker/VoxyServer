@@ -45,6 +45,8 @@ repositories {
 }
 
 def lwjglVersion = "3.4.1"
+def serverLwjgl = configurations.create("serverLwjgl")
+serverLwjgl.transitive = false
 
 dependencies {
     // To change the versions see the gradle.properties file
@@ -61,10 +63,33 @@ dependencies {
     // lwjgl is bundled with the client but not the dedicated server
     // voxy's Mapper uses MemoryUtil for off-heap allocation
     implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
-    include(implementation("org.lwjgl:lwjgl"))
-    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-windows"))
-    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-linux"))
-    include(runtimeOnly("org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"))
+    implementation "org.lwjgl:lwjgl"
+    runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-windows"
+    runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux"
+    runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"
+
+    add("serverLwjgl", "org.lwjgl:lwjgl:$lwjglVersion")
+    add("serverLwjgl", "org.lwjgl:lwjgl:$lwjglVersion:natives-windows")
+    add("serverLwjgl", "org.lwjgl:lwjgl:$lwjglVersion:natives-linux")
+    add("serverLwjgl", "org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64")
+}
+
+def serverLwjglJar = tasks.register("serverLwjglJar", Jar) {
+    archiveFileName = "voxyserver-lwjgl.jar"
+    destinationDirectory = layout.buildDirectory.dir("serverLwjgl")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    inputs.property "lwjglVersion", lwjglVersion
+
+    from {
+        serverLwjgl.collect { zipTree(it) }
+    }
+    from("src/serverLwjgl/resources") {
+        expand "lwjgl_version": lwjglVersion
+    }
+    exclude "META-INF/MANIFEST.MF", "META-INF/INDEX.LIST", "**/module-info.class"
+    manifest {
+        attributes "Multi-Release": "true"
+    }
 }
 
 processResources {
@@ -104,6 +129,10 @@ java {
 }
 
 jar {
+    dependsOn serverLwjglJar
+    from(serverLwjglJar) {
+        into "META-INF/jars"
+    }
     from("LICENSE") {
         rename { "${it}_${project.archives_base_name}" }
     }

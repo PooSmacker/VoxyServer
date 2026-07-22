@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "voxyserver_lwjgl",
+  "version": "${lwjgl_version}",
+  "name": "VoxyServer LWJGL",
+  "environment": "server"
+}

@@ -45,6 +45,9 @@ public class LodStreamingService {
     private static final int INITIAL_LOAD_MIN_CHUNKS_AT_DEADLINE = 3;
     private static final int MAX_DIRTY_SECTIONS_PER_DRAIN = 64;
     private static final int MAX_MANIFEST_BATCHES_PER_DRAIN = 4;
+    private static final int MAX_SCAN_CANDIDATES_PER_SNAPSHOT = 16_384;
+    private static final int MAX_ACQUIRE_ATTEMPTS_PER_SNAPSHOT = 256;
+    private static final int MAX_MISSING_ACQUIRES_PER_SNAPSHOT = 16;
     // we have a grace window for the client manifest to arrive before the scan falls back to a full send
     private static final long MANIFEST_TIMEOUT_TICKS = 60L;
 
@@ -405,6 +408,8 @@ public class LodStreamingService {
         currentStreamDimension = snap.dimension;
         WorldEngine world = engine.getOrCreate(snap.worldId, snap.dimension);
         if (world == null) return;
+        if (!engine.prepareStoredSectionPresence(
+                snap.worldId, world, () -> lastStreamHeartbeat = System.nanoTime())) return;
 
         int playerWorldSecX = snap.chunkX >> 1;
         int playerWorldSecZ = snap.chunkZ >> 1;
@@ -413,7 +418,6 @@ public class LodStreamingService {
         int effectiveMaxSections = tracker.getEffectiveMaxSections(maxSectionsPerTick);
         int radiusSections = effectiveRadius >> 1;
         Mapper mapper = world.getMapper();
-        long scanTick = currentTick;
         int dimOrd = dimOrdinals.getOrdinal(snap.dimension);
 
         if (!tracker.prepareScan(
@@ -422,7 +426,7 @@ public class LodStreamingService {
                 radiusSections,
                 snap.minY,
                 snap.maxY,
-                scanTick,
+                currentTick,
                 IDLE_SCAN_RESTART_TICKS
         )) {
             return;
@@ -430,14 +434,22 @@ public class LodStreamingService {
 
         List<LODSectionPayload> batch = new ArrayList<>();
         int sent = 0;
+        int candidates = 0;
+        int acquireAttempts = 0;
+        int missingAcquires = 0;
+        int acquireLimit = Math.min(effectiveMaxSections, MAX_ACQUIRE_ATTEMPTS_PER_SNAPSHOT);
 
-        while (sent < effectiveMaxSections) {
+        while (sent < effectiveMaxSections
+                && candidates < MAX_SCAN_CANDIDATES_PER_SNAPSHOT
+                && acquireAttempts < acquireLimit
+                && missingAcquires < MAX_MISSING_ACQUIRES_PER_SNAPSHOT) {
             lastStreamHeartbeat = System.nanoTime();
 
-            long key = tracker.nextSectionKeyToScan(scanTick, IDLE_SCAN_RESTART_TICKS);
+            long key = tracker.nextSectionKeyToScan(currentTick, IDLE_SCAN_RESTART_TICKS);
             if (key == PlayerLodTracker.NO_SECTION_KEY) {
                 break;
             }
+            candidates++;
 
             long composite = composeSectionKey(dimOrd, key);
             int version = getSectionVersion(dimOrd, key);
@@ -446,9 +458,14 @@ public class LodStreamingService {
             // we cn js skip without acquiring when the cached hash is current and the client already has it
             long[] cached = hashCacheByKey.get(composite);
             if (cached != null && cached[0] == version && tracker.hasSent(composite, cached[1])) continue;
+            if (!engine.mayHaveStoredSection(snap.worldId, key)) continue;
 
+            acquireAttempts++;
             WorldSection section = world.acquireIfExists(key);
-            if (section == null) continue;
+            if (section == null) {
+                missingAcquires++;
+                continue;
+            }
 
             try {
                 LODSectionPayload payload = serializeSection(section, snap.dimension, mapper, snap.biomeRegistry);

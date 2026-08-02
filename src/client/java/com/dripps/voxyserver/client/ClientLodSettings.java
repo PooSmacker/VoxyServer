@@ -28,6 +28,7 @@ public class ClientLodSettings {
     private static int serverMaxRadius = -1;
     private static int serverMaxSections = -1;
     private static volatile boolean protocolOk = false;
+    private static volatile boolean serverHashSyncEnabled = true;
 
     private static int lastManifestCenterSecX;
     private static int lastManifestCenterSecZ;
@@ -72,6 +73,7 @@ public class ClientLodSettings {
         serverMaxRadius = -1;
         serverMaxSections = -1;
         protocolOk = false;
+        serverHashSyncEnabled = true;
         lastManifestDim = null;
         manifestSent = false;
         pendingManifestRequest.set(null);
@@ -89,22 +91,37 @@ public class ClientLodSettings {
 
     public static void setProtocolOk(boolean value) {
         protocolOk = value;
-        if (value && serverMaxRadius >= 0) {
+        if (value && serverHashSyncEnabled && serverMaxRadius >= 0) {
             requestManifestBuild();
         }
     }
 
     public static void applyServerSettings(int maxRadius, int maxSections) {
+        boolean radiusChanged = serverMaxRadius != maxRadius;
         serverMaxRadius = maxRadius;
         serverMaxSections = maxSections;
         sendPreferences();
-        if (protocolOk) {
+        if (protocolOk && serverHashSyncEnabled && radiusChanged) {
+            requestManifestBuild();
+        }
+    }
+
+    public static void applyHashSyncSettings(boolean enabled) {
+        boolean wasEnabled = serverHashSyncEnabled;
+        serverHashSyncEnabled = enabled;
+        if (!enabled) {
+            pendingManifestRequest.set(null);
+            pendingManifestDispatch.set(null);
+            manifestRequestGeneration.incrementAndGet();
+            manifestSent = false;
+            lastManifestDim = null;
+        } else if (!wasEnabled && protocolOk && serverMaxRadius >= 0) {
             requestManifestBuild();
         }
     }
 
     public static void onClientTick() {
-        if (!protocolOk || !isEnabled() || serverMaxRadius < 0) return;
+        if (!protocolOk || !serverHashSyncEnabled || !isEnabled() || serverMaxRadius < 0) return;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.getConnection() == null) return;
@@ -144,6 +161,7 @@ public class ClientLodSettings {
     // tells the server which sections we already store so it can skip resending them
     // captures player state on the client thread then hands the heavy build to the ingest worker
     private static void requestManifestBuild() {
+        if (!serverHashSyncEnabled) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.getConnection() == null) return;
         ClientLevel level = mc.level;
@@ -258,7 +276,8 @@ public class ClientLodSettings {
     }
 
     private static boolean isCurrentManifestRequest(ManifestRequest request) {
-        return connectionGeneration.get() == request.connectionGeneration()
+        return serverHashSyncEnabled
+                && connectionGeneration.get() == request.connectionGeneration()
                 && manifestRequestGeneration.get() == request.requestGeneration();
     }
 
@@ -281,6 +300,7 @@ public class ClientLodSettings {
     }
 
     private static void sendPendingManifestChunk(Identifier currentDimension) {
+        if (!serverHashSyncEnabled) return;
         ManifestDispatch dispatch = pendingManifestDispatch.get();
         if (dispatch == null) return;
         if (connectionGeneration.get() != dispatch.connectionGeneration
@@ -317,6 +337,7 @@ public class ClientLodSettings {
         serverMaxRadius = -1;
         serverMaxSections = -1;
         protocolOk = false;
+        serverHashSyncEnabled = true;
         lastManifestDim = null;
         manifestSent = false;
         pendingManifestRequest.set(null);

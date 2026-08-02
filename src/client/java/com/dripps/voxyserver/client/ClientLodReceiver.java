@@ -4,6 +4,7 @@ import com.dripps.voxyserver.client.service.IVoxyServerIngestAccess;
 import com.dripps.voxyserver.client.service.RemoteIngestService;
 import com.dripps.voxyserver.network.LODClearPayload;
 import com.dripps.voxyserver.network.LODHandshakePayload;
+import com.dripps.voxyserver.network.LODHashSyncSettingsPayload;
 import com.dripps.voxyserver.network.LODProtocolPayload;
 import com.dripps.voxyserver.network.LODServerSettingsPayload;
 import com.dripps.voxyserver.network.PreSerializedLodPayload;
@@ -57,6 +58,10 @@ public class ClientLodReceiver {
         ClientPlayNetworking.registerGlobalReceiver(LODServerSettingsPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> ClientLodSettings.applyServerSettings(
                     payload.maxLodStreamRadius(), payload.maxSectionsPerTick()));
+        });
+
+        ClientPlayNetworking.registerGlobalReceiver(LODHashSyncSettingsPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> ClientLodSettings.applyHashSyncSettings(payload.enabled()));
         });
 
         ClientPlayNetworking.registerGlobalReceiver(PreSerializedLodPayload.TYPE, (payload, context) -> {

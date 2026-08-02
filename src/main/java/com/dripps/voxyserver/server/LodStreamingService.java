@@ -4,6 +4,7 @@ import com.dripps.voxyserver.Voxyserver;
 import com.dripps.voxyserver.network.LODBulkPayload;
 import com.dripps.voxyserver.network.LODClearPayload;
 import com.dripps.voxyserver.network.LODHandshakePayload;
+import com.dripps.voxyserver.network.LODHashSyncSettingsPayload;
 import com.dripps.voxyserver.network.LODManifestPayload;
 import com.dripps.voxyserver.network.LODPreferencesPayload;
 import com.dripps.voxyserver.network.LODProtocolPayload;
@@ -170,7 +171,7 @@ public class LodStreamingService {
                 tracker.setProtocolOk(true);
                 tracker.setActiveDimension(player.level().dimension().identifier());
                 ServerPlayNetworking.send(player, new LODProtocolPayload(serverProto));
-                ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
+                sendSettings(player);
                 if (hashSyncEnabled) {
                     Identifier dim = player.level().dimension().identifier();
                     tracker.beginManifestWait(dim, currentTick + MANIFEST_TIMEOUT_TICKS);
@@ -256,6 +257,7 @@ public class LodStreamingService {
     public void updateConfig(int lodStreamRadius, int maxSectionsPerTick,
                              int sectionsPerPacket, int tickInterval,
                              int dirtyTrackingInterval, boolean hashSyncEnabled) {
+        boolean hashSyncChanged = this.hashSyncEnabled != hashSyncEnabled;
         this.lodStreamRadius = lodStreamRadius;
         this.maxSectionsPerTick = maxSectionsPerTick;
         this.sectionsPerPacket = sectionsPerPacket;
@@ -268,6 +270,24 @@ public class LodStreamingService {
                 tracker.clearManifestWait();
             }
         }
+        if (hashSyncChanged && server != null) {
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                PlayerLodTracker tracker = trackers.get(player.getUUID());
+                if (tracker == null || !tracker.isReady() || !tracker.isProtocolOk()) continue;
+                if (hashSyncEnabled) {
+                    Identifier dim = player.level().dimension().identifier();
+                    tracker.beginManifestWait(dim, currentTick + MANIFEST_TIMEOUT_TICKS);
+                }
+                sendSettings(player);
+            }
+        }
+    }
+
+    private void sendSettings(ServerPlayer player) {
+        if (ServerPlayNetworking.canSend(player, LODHashSyncSettingsPayload.TYPE)) {
+            ServerPlayNetworking.send(player, new LODHashSyncSettingsPayload(hashSyncEnabled));
+        }
+        ServerPlayNetworking.send(player, new LODServerSettingsPayload(lodStreamRadius, maxSectionsPerTick));
     }
 
     public void shutdown() {
